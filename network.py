@@ -89,7 +89,7 @@ def input_fn(features, labels, training=False, batch_size=256):
 	return dataset.batch(batch_size)
 '''
 class nn:
-	def __init__(self,init):
+	def __init__(self,init=False):
 		if init:
 			self.model=tf.keras.Model(inputs=inputs,outputs=policy)
 			self.model.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=0.001,momentum=0.9,name='SGD'),loss='categorical_crossentropy',metrics=['accuracy'])
@@ -103,8 +103,9 @@ class nn:
 		self.model.save(name)
 	def load(self,name):
 		self.model=tf.contrib.keras.models.load_model(name)
+'''
 nn=nn(True)
-x=np.random.randint(2,size=(1024,4,4,16)).astype('float32')
+x=np.random.randint(2,size=(1024,4,4,18)).astype('float32')
 y=np.random.randint(100,size=(1024,4)).astype('float32')
 for i in range(1024):
 	total=sum(y[i])
@@ -112,3 +113,4 @@ for i in range(1024):
 		y[i][j]/=total
 nn.train(x,y)
 nn.save('random.h5')
+'''

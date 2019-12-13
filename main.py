@@ -1,4 +1,4 @@
-from random import randint
+from random import randint,random
 from copy import copy,deepcopy
 from network import nn
 bg   ="\x1b[48;5;"
@@ -97,21 +97,71 @@ class board:
 		if a==tmp.grid:
 			return False
 		return True
-def selfplay(nn,games_num,batch):
+def selfplay(nn,games_num,batch):#because I should predict many games in one go to save time, it's a little complicated.#unfinished, too complex, will fix
+	predata=[]
 	boards=[]
 	status=[]
+	dataindexes=[]
+	newdataindex=0
 	for i in range(batch):
+		predata.append([])
 		boards.append(board())
-		status.append(False)#if TRUE, finished
+		status.append(True)#if TRUE, finished
+		dataindexes.append([])
+		newdataindex+=1
 	finish_num=0
 	running=0
 	while finish_num<games_num:#a loop, play a move in all games
-		while running<batch:
-			boards[status.index(True)].init()
-		data=[]
-		for aboard in boards:
-			data.append([])
+		while running<batch and finish_num+running<games_num:
+			index=status.index(True)
+			boards[index].init()
+			predata.append([])
+			status[index]=False
+			dataindexes.append(newdataindex)
+			running+=1
+			newdataindex+=1
+		net_inputs=[]
+		for aboard in boards:#so I have to remove the board after a game is finished.
+			net_inputs.append([])#batch(axis0)
 			for i in aboard.grid:
+				net_inputs[-1].append([])#boardx(axis1)
 				for j in i:
-					for i in range(16):
-						
+					net_inputs[-1][-1].append([])#boardy(axis2)
+					for num in range(18):
+						net_inputs[-1][-1][-1].append(int(j==num))
+		net_inputs=np.array(net_inputs).astype('float32')
+		moves=nn.predict(net_inputs)
+		play=[]
+		for num in range(len(boards)):#alist is something like [0.2,0.4,0.3,0.3]
+			alist=moves[num]
+			p=None
+			while True:
+				a=random()
+				if a<alist[0]:
+					p=0
+				else:
+					a-=alist[0]
+				if a<alist[1]:
+					p=1
+				else:
+					a-=alist[1]
+				if a<alist[2]:
+					p=2
+				else:
+					p=3
+				if boards[num].ok(p):
+					play.append(p)
+					break
+				alist[num]=0.
+				total=sum(alist)
+				for i in range(4):
+					alist[i]/=total
+		for num in len(boards):#so I have to remove the board after a game is finished.
+			predata[dataindexes[num]].append([net_inputs[num],play[num]])
+			boards[num].play(play[num])
+			if boards[num].finish():
+				if finish_num+running<games_num:
+					running-=1
+					status[num]=True
+				else:
+					...
