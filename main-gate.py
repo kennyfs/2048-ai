@@ -2,25 +2,24 @@ from random import randint,random
 from copy import copy,deepcopy
 from network import nn
 import numpy as np
-from time import time,sleep
+from time import time
 from itertools import chain
 bg   ="\x1b[48;5;"
 word ="\x1b[38;5;"
 end  ="m"
 reset="\x1b[0m"
 class board:
-	def __init__(self,board=None,score=None):
+	def __init__(self,board=None):
 		if board:#if it's not None
 			self.grid=board
 		else:
-			self.init()
-		if score:
-			self.score=score
+			self.grid=[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]]
+			self.add()
+			self.add()
+		self.score=0
 		self.last_move=None
 	def init(self):
-		self.grid=[[0,10,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]]
-		self.add()
-		self.add()
+		self.grid=[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]]
 		self.score=0
 	def movealine(self,line,reverse):
 		if reverse:
@@ -82,13 +81,11 @@ class board:
 	def finish(self):
 		for x in range(4):
 			for y in range(4):
-				if self.grid[x][y]==0:
-					return False
 				for i in ((1,0),(0,1),(-1,0),(0,-1)):
 					tx,ty=x+i[0],y+i[1]
 					if tx>3 or ty>3 or tx<0 or ty<0:
 						continue
-					if self.grid[x][y]==self.grid[tx][ty]:
+					if self.grid[x][y]==0 or self.grid[x][y]==self.grid[tx][ty]:
 						return False
 		return True
 	def add(self):
@@ -143,7 +140,7 @@ def selfplay(nn,game_num,batch):#because I should predict many games in one go t
 				for j in i:
 					net_inputs[-1][-1].append([])#boardy(axis2)
 					for num in range(18):
-						net_inputs[-1][-1][-1].append(float(j==num))
+						net_inputs[-1][-1][-1].append(int(j==num))
 			predata[gameid].append(net_inputs[-1])
 		net_inputs=np.array(net_inputs).astype('float32')
 		moves=nn.predict(net_inputs)
@@ -151,7 +148,7 @@ def selfplay(nn,game_num,batch):#because I should predict many games in one go t
 		random=np.random.rand(running)
 		play=[]
 		#decide what to play
-		for num,a in enumerate(random):#alist is something like [0.2,0.4,0.3,0.3], which the sum is always 1.0
+		for a,num in zip(random,range(running)):#alist is something like [0.2,0.4,0.3,0.3], which the sum is always 1.0
 			'''
 			alist=moves[num]
 			num=alist[0]
@@ -211,46 +208,74 @@ def selfplay(nn,game_num,batch):#because I should predict many games in one go t
 	#	if len(boards)>0 and boards[0][0]==0:
 	#		boards[0][1].dump()
 	#	time.sleep(0.2)
+	'''
 	data=[]
 	for i in predata:
 		data.extend(i)
 	data=np.array(data)
+	print(data.shape)
+	'''
 	scores=np.array([v for k, v in sorted(scores.items(), key=lambda item: item[0])])
 	#data's shape is (games,moves of that game)
 	#movesdata's shape is (games,moves([0..3]))
 	#scores' shape is (games)
-	return data,movesdata,scores
-nn=nn(init=True)
-#nn.load('nosearch.h5')
+	return predata,movesdata,scores
+nn=nn(init=False)
+nn.load('nosearch-gate0.h5')
 def test():
 	_,_2,scores=selfplay(nn,1000,1000)
 	scores=[v for k, v in sorted(scores.items(), key=lambda item: item[0])]
 	scores=np.array(scores)
 	print(_,'mean:',np.mean(scores),'stddev:',np.std(scores),end='')
+def get(game_num,batch):
+	data,moves,scores=selfplay(nn,game_num,batch)
+	std=np.std(scores)
+	print('mean',np.mean(scores),'std',std)
+	normalscores=(scores-np.mean(scores))/std
+	i=0
+	todel=[]
+	while i<len(normalscores):
+		if normalscores[i]<0:
+			todel.append(i)
+		i+=1
+	for index in sorted(todel, reverse=True):
+		del moves[index]
+		del data[index]
+#	print((game_num-len(todel))/float(game_num)*100,'% of data remains.')
+	scores=np.delete(scores,todel,0)
+#	print(len(data),len(moves),len(scores))
+	return data,moves,scores
 def train(game_num,batch,times):
 	for _ in range(times):
-		start=time()
-		data,moves,scores=selfplay(nn,game_num,batch)
-		print('No.',_,game_num/(time()-start),'games/sec,mean:',np.mean(scores),'stddev:',np.std(scores),end='')
-		std=np.std(scores)
-		scores=(scores-np.mean(scores))/std
-		goal=0.5/(1+np.exp(-scores))
-		#print(scores,goal)
+		data=[]
+		moves=[]
+		scores=[]
+		sum_games=0
+		while sum_games<game_num:
+			start=time()
+			datal,movesl,scoresl=get(game_num,game_num)
+			sum_games+=len(scoresl)
+		#	print('No.',_,game_num/(time()-start),'games/sec,mean:',np.mean(scoresl),'stddev:',np.std(scoresl),'\nsumgames=',sum_games,'the passing games',len(scoresl))
+			print('sum_games',sum_games)
+			data.extend(datal)
+			moves.extend(movesl)
+			scores=np.concatenate((scores,scoresl),axis=0)
 		label=[]
+		std=np.std(scores)
 		for i in range(len(scores)):
-			v_move=goal[i]
-			v_other=(1-v_move)/3
-			#print(v_move,v_other)
 			for j in range(len(moves[i])):
 				label.append([])
 				for k in range(4):
 					if k==moves[i][j]:
-						label[-1].append(v_move)
+						label[-1].append(1.)
 					else:
-						label[-1].append(v_other)
-		label=np.array(label)
-		print(label.shape[0])
-		data=np.asarray(data,dtype=np.float32)
-		nn.train(data,label,30)
-		nn.save('nosearchnogate.h5')
+						label[-1].append(0)
+		label=np.asarray(label,dtype=np.float32)
+		print('label num:',label.shape[0])
+		finaldata=[]
+		for i in data:
+			finaldata.extend(i)
+		data=np.asarray(finaldata,dtype=np.float32)
+		nn.train(data,label,int(std/40))
+		nn.save('nosearch-gate0.h5')
 train(1000,1000,10)

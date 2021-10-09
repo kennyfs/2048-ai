@@ -4,26 +4,52 @@ import numpy as np
 #if I use tpu, optimizer must handle by "tf.tpu.CrossShardOptimizer" to cross more than one tpus.And then use it as GPU!!!
 inputs=tf.keras.Input(shape=(4,4,18))#from 0 to 17, 0 to 131072
 conv1=tf.keras.layers.Conv2D(
-	filters=2,
+	filters=10,
 	kernel_size=(2,1),padding="same",
 	activation=None,
 	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
 	)(inputs)
 conv2=tf.keras.layers.Conv2D(
-	filters=2,
+	filters=10,
 	kernel_size=(1,2),padding="same",
 	activation=None,
 	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
 	)(inputs)
 conv=tf.keras.layers.Concatenate(axis=-1)([conv1,conv2])#last axis, channel
 conv1=tf.keras.layers.Conv2D(
-	filters=2,
+	filters=10,
 	kernel_size=(2,1),padding="same",
 	activation=None,
 	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
 	)(conv)
 conv2=tf.keras.layers.Conv2D(
-	filters=2,
+	filters=10,
+	kernel_size=(1,2),padding="same",
+	activation=None,
+	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
+	)(conv)
+conv=tf.keras.layers.Concatenate(axis=-1)([conv1,conv2])#last axis, channel
+conv1=tf.keras.layers.Conv2D(
+	filters=10,
+	kernel_size=(2,1),padding="same",
+	activation=None,
+	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
+	)(inputs)
+conv2=tf.keras.layers.Conv2D(
+	filters=10,
+	kernel_size=(1,2),padding="same",
+	activation=None,
+	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
+	)(inputs)
+conv=tf.keras.layers.Concatenate(axis=-1)([conv1,conv2])#last axis, channel
+conv1=tf.keras.layers.Conv2D(
+	filters=10,
+	kernel_size=(2,1),padding="same",
+	activation=None,
+	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
+	)(conv)
+conv2=tf.keras.layers.Conv2D(
+	filters=10,
 	kernel_size=(1,2),padding="same",
 	activation=None,
 	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
@@ -92,11 +118,11 @@ class nn:
 	def __init__(self,init=False):
 		if init:
 			self.model=tf.keras.Model(inputs=inputs,outputs=policy)
-			self.model.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=0.001,momentum=0.9,name='SGD'),loss='categorical_crossentropy',metrics=['accuracy'])
+			self.model.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=0.01,momentum=0.9,name='SGD'),loss='categorical_crossentropy',metrics=['accuracy'])
 		else:
 			self.model=None
-	def train(self,data,label):
-		self.model.fit(data,label,epochs=5,steps_per_epoch=1000,batch_size=32)
+	def train(self,data,label,epoch=10):
+		self.model.fit(data,label,epochs=epoch,steps_per_epoch=100,batch_size=128)
 	def predict(self,data):
 		return self.model.predict(data)
 	def save(self,name):
