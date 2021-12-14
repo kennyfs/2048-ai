@@ -1,31 +1,63 @@
 from random import randint,random
 from copy import copy,deepcopy
-from network import nn
+#from network import nn
 import numpy as np
 from time import time,sleep
 from itertools import chain
+TRAIN=0
 bg   ="\x1b[48;5;"
 word ="\x1b[38;5;"
 end  ="m"
 reset="\x1b[0m"
+class game:
+	def __init__(self,player='Human',modelinfo=None):
+		self.data={'player':player,'modelinfo':modelinfo}
+		self.moves=[]
+	def addrand(self,x,y,v):
+		self.moves.append((2,x,y,v))
+	def play(self,direction):
+		self.moves.append((1,direction))
+	def replay(self):
+		tmp=board([[0]*4 for i in range(4)],addwhenplay=False)
+		for i in self.moves:
+			sleep(0.5)
+			if i[0]==1:
+				tmp.play(i[1])
+			else:
+				tmp.grid[i[1]][i[2]]=i[3]
+			tmp.dump()
+			sleep(0.5)
+	def write(self,f):
+		with open(f,'w') as F:
+			F.write(str(self.data))
+			F.write('\n')
+			F.write(str(self.moves))
+	def read(self,f):#clear origin data, moves
+		with open(f,'r') as F:
+			self.data=eval(F.readline())
+			self.moves=eval(F.readline())
 class board:
-	def __init__(self,board=None,score=None):
+	def __init__(self,board=None,score=None,g=None,addwhenplay=True):
+		self.g=g
 		if board:#if it's not None
 			self.grid=board
 		else:
 			self.init()
 		if score:
 			self.score=score
+		else:
+			self.score=0
 		self.last_move=None
+		self.addwhenplay=addwhenplay
 	def init(self):
-		self.grid=[[0,10,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]]
+		self.grid=[[0]*4 for i in range(4)]
 		self.add()
 		self.add()
 		self.score=0
-	def movealine(self,line,reverse):
+	def movealine(self,line,reverse):#move from 3 to 0
 		if reverse:
-			line=[line[3],line[2],line[1],line[0]]#reverse
-		#move
+			line=line[::-1]#reverse
+		#move over all blank
 		index=1
 		while index<4:
 			forward=index-1
@@ -35,24 +67,17 @@ class board:
 				forward-=1
 			index+=1
 		#combine
-		if line[0]==line[1] and line[0]>0:
-			line[0]+=1
-			line[1]=0
-			self.score+=2**line[0]
-		if line[1]==line[2] and line[1]>0:
-			line[1]+=1
-			line[2]=0
-			self.score+=2**line[1]
-		if line[2]==line[3] and line[2]>0:
-			line[2]+=1
-			line[3]=0
-			self.score+=2**line[2]
+		for i in range(3):
+			if line[i]==line[i+1] and line[i]>0:
+				line[i]+=1
+				line[i+1]=0
+				self.score+=2**line[i]
 		#move
-		for i in range(1,3):
+		for i in range(1,2+1):
 			if line[i]==0:
 				line[i],line[i+1]=line[i+1],0
 		if reverse:
-			line=[line[3],line[2],line[1],line[0]]#reverse
+			line=line[::-1]#reverse
 		return line
 	def moveall(self,drc):#up down left right
 		if drc==0:
@@ -106,11 +131,16 @@ class board:
 		else:
 			v=1
 		self.grid[none[i][0]][none[i][1]]=v
+		if self.g:
+			self.g.addrand(none[i][0],none[i][1],v)
 		return True
 	def play(self,direction):
 		self.last_move=direction
 		self.moveall(direction)
-		return self.add()
+		if self.g:
+			self.g.play(direction)
+		if self.addwhenplay:
+			self.add()
 	def ok(self,direction):
 		tmp=board(deepcopy(self.grid))
 		a=deepcopy(tmp.grid)
@@ -220,7 +250,8 @@ def selfplay(nn,game_num,batch):#because I should predict many games in one go t
 	#movesdata's shape is (games,moves([0..3]))
 	#scores' shape is (games)
 	return data,movesdata,scores
-nn=nn(init=True)
+if TRAIN:
+	nn=nn(init=True)
 #nn.load('nosearch.h5')
 def test():
 	_,_2,scores=selfplay(nn,1000,1000)
@@ -253,4 +284,30 @@ def train(game_num,batch,times):
 		data=np.asarray(data,dtype=np.float32)
 		nn.train(data,label,30)
 		nn.save('nosearchnogate.h5')
-train(1000,1000,10)
+if TRAIN:
+	train(1000,1000,10)
+def player():
+	g=game()
+	b=board(g=g)
+	for _ in range(10):
+		b.dump()
+		done=False
+		while not done:
+			ok=False
+			while not ok:
+				ok=True
+				try:a=int(input())
+				except:ok=False
+				if a>3 or a<0:
+					ok=False
+			if b.ok(a):
+				b.play(a)
+				done=True
+	b.dump()
+	g.write('test.sgf')
+#replay
+g=game()
+g.read('test.sgf')
+g.replay()
+#play
+player()
