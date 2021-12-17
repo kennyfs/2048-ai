@@ -4,6 +4,7 @@ from copy import copy,deepcopy
 import numpy as np
 from time import time,sleep
 from environment import Environment,Action
+import collections
 bg   ="\x1b[48;5;"
 word ="\x1b[38;5;"
 end  ="m"
@@ -13,8 +14,12 @@ assumption:
 total training steps=1e5 or less
 '''
 def get_features(grid):#given grid, return features for Network input
-	pass
-	### TODO
+	grid=np.array(grid)
+	result=[]
+	for i in range(1,16+1):
+		result.append(np.where(grid==i,1.0,0.0))
+	return np.array(result)
+	
 def default_visit_softmax_temperature(num_moves,training_steps):
 	if training_steps < 50e3:
 	  return 1.0
@@ -22,9 +27,31 @@ def default_visit_softmax_temperature(num_moves,training_steps):
 	  return 0.5
 	else:
 	  return 0.25
+	  
+MAXIMUM_FLOAT_VALUE=float('inf')
+KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
+class MinMaxStats():
+	"""A class that holds the min-max values of the tree."""
+
+	def __init__(self,known_bounds:Optional[KnownBounds]):
+		self.maximum=known_bounds.max if known_bounds else -MAXIMUM_FLOAT_VALUE
+		self.minimum=known_bounds.min if known_bounds else MAXIMUM_FLOAT_VALUE
+		#any update is accepted
+		
+	def update(self,value:float):
+		self.maximum=max(self.maximum,value)
+		self.minimum=min(self.minimum,value)
+
+	def normalize(self,value:float)->float:
+		if self.maximum>self.minimum:
+			# We normalize only when we have set the maximum and minimum values.
+			return (value-self.minimum)/(self.maximum-self.minimum)
+		return value
+
 class Config:
 	def __init__(self,
-				action_space_size:int,
+				action_space_type0_size:int,
+				action_space_type1_size:int,
 				max_moves:int,
 				discount:float,
 				dirichlet_alpha:float,
@@ -37,7 +64,8 @@ class Config:
 				visit_softmax_temperature_fn,
 				known_bounds:Optional[KnownBounds]=None):
 	### Self-Play
-	self.action_space_size=action_space_size
+	self.action_space_type0_size=action_space_type0_size
+	self.action_space_type1_size=action_space_type1_size
 	self.num_actors=num_actors
 
 	self.visit_softmax_temperature_fn=visit_softmax_temperature_fn
@@ -76,51 +104,99 @@ class Config:
 	self.lr_decay_steps=lr_decay_steps
 
 	def new_game(self):
-		return Game(self.action_space_size,self.discount)
+		return Game(self)
+
 def default_config():
 	return Config(action_space_size=4,
 				max_moves=1e5,#it can be infinity because any 2048 game is bound to end
-				discount=0.9,
+				discount=0.97,
 				dirichlet_alpha=0.3,
 				num_simulations=100,
 				batch_size=1024,
-				td_steps=15,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
+				td_steps=10,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
 				num_actors=1000,
 				lr_init=0.1,
 				lr_decay_steps=35e3,
 				visit_softmax_temperature_fn=default_visit_softmax_temperature)
+
+class ActionHistory():
+	"""Simple history container used inside the search.
+
+	Only used to keep track of the actions executed.
+	"""
+
+	def __init__(self, history: List[Action], action_space_size: int):
+		self.history = list(history)
+		self.action_space_size = action_space_size
+
+	def clone(self):
+		return ActionHistory(self.history, self.action_space_size)
+
+	def add_action(self, action: Action):
+		self.history.append(action)
+
+	def last_action(self) -> Action:
+		return self.history[-1]
+
+	def action_space(self) -> List[Action]:
+		return [Action(i) for i in range(self.action_space_size)]
+
+class Node():
+	def __init__(self,p:float):
+		self.visit_count=0
+		self.p=p
+		self.value_sum=0
+		self.children={}#Dict[Action,Node]
+		self.hidden_state=None
+		self.reward=0
+
+	def expanded(self)->bool:
+		return len(self.children)>0
+
+	def value(self)->float:
+		if self.visit_count==0:
+			return 0
+		return self.value_sum/self.visit_count
+
 class Game:
-	# Game is not responsible for record game
+	# In any game, the first two actions are adding tile, then each move is followed by adding tile
 	def __init__(self,config:Config):
 		self.environment=Environment()  # Game specific environment.
 		self.history=[]#List[Action]
+		self.type=[]#0:move,1:adding tile # will also stored in Node
 		self.child_visits=[]
 		self.root_values=[]
-		self.action_space_size=config.action_space_size
+		self.action_space_type0_size=config.action_space_type0_size
+		self.action_space_type1_size=config.action_space_type1_size
 		self.discount=config.discount
+		
 	def terminal(self)->bool:
 		# if the game ends
 		return self.environment.finish()
+		
 	def legal_actions(self)->List[Action]:
-		# list of legal actions
+		# list of legal actions, only care about move
 		return self.environment.legal_actions()
-
+		
 	def apply(self,action:Action):
 		reward = self.environment.step(action)
 		self.rewards.append(reward)
 		self.history.append(action)
-### TODO:action 0~3 (move) is to be chosen by agent, but putting a tile should be randomly chosen.
-### will deal with store search stats, etc
+		self.type.append(1 if 0<=action.type and action.type<=3 else 0)
+		
 	def store_search_statistics(self, root: Node):
+		#only store type 0(move)
 		#root.children is Dict[Node] whose keys are actions
 		sum_visits = sum(child.visit_count for child in root.children.values())
-		action_space = (Action(index) for index in range(self.action_space_size))
+		action_space = (Action(index) for index in range(self.action_space_type0_size))
 		self.child_visits.append([
 				root.children[a].visit_count / sum_visits if a in root.children else 0
 				for a in action_space
 		])
 		self.root_values.append(root.value())
-
+		#adding tile
+		self.child_visits.append(None)
+		self.root_values.append(None)
 	def make_image(self, state_index: int):#-1 means the last
 		# Game specific feature planes.
 		# Go through history
@@ -141,15 +217,16 @@ class Game:
 		# The value target is the discounted root value of the search tree N steps
 		# into the future, plus the discounted sum of all rewards until then.
 		targets = []
-		for current_index in range(state_index, state_index + num_unroll_steps + 1):
+		for current_index in range(state_index, state_index + num_unroll_steps + 1,2):#calc every 2 moves, only makes target for type0(move)
 			bootstrap_index = current_index + td_steps
 			if bootstrap_index < len(self.root_values):
 				value = self.root_values[bootstrap_index] * self.discount**td_steps
 			else:
 				value = 0
-
-			for i, reward in enumerate(self.rewards[current_index:bootstrap_index]):
-				value += reward * self.discount**i	# pytype: disable=unsupported-operands
+			dis=1
+			for reward in self.rewards[current_index:bootstrap_index]:
+				value += reward * dis	# pytype: disable=unsupported-operands
+				dis*=self.discount
 
 			# For simplicity the network always predicts the most recently received
 			# reward, even for the initial representation network where we already
@@ -165,26 +242,49 @@ class Game:
 				# States past the end of games are treated as absorbing states.
 				targets.append((0, last_reward, []))
 		return targets
-
-	def to_play(self) -> Player:
-		return Player()
-
 	def action_history(self) -> ActionHistory:
-		return ActionHistory(self.history, self.action_space_size)
-	def addrand(self,x,y,v):
-		self.history.append((2,x,y,v))
-	def step(self,action):
-		self.history.append((1,action))
+		return ActionHistory(self.history, self.action_space_type0_size)
 	def replay(self):
 		tmp=Environment([[0]*4 for i in range(4)],addwhenplay=False)
 		for i in self.history:
-			sleep(0.5)
-			if i[0]==1:
-				tmp.step(i[1])
-			else:
-				tmp.grid[i[1]][i[2]]=i[3]
+			sleep(0.8)
+			tmp.step(i)
 			tmp.dump()
-			sleep(0.5)
+	def write(self,f):
+		with open(f,'w') as F:
+			F.write(str(self.data))
+			F.write('\n')
+			F.write(str(self.moves))
+	def read(self,f):#clear origin data, moves
+		with open(f,'r') as F:
+			self.data=eval(F.readline())
+			self.moves=eval(F.readline())
+class ReplayBuffer():### Starting from here next time
+	def __init__(self, config: MuZeroConfig):
+		self.window_size = config.window_size
+		self.batch_size = config.batch_size
+		self.buffer = []
+		
+	def save_game(self, game):
+		if len(self.buffer) > self.window_size:
+			self.buffer.pop(0)
+		self.buffer.append(game)
+		
+	def sample_batch(self, num_unroll_steps: int, td_steps: int):
+		games = [self.sample_game() for _ in range(self.batch_size)]
+		game_pos = [(g, self.sample_position(g)) for g in games]
+		return [(g.make_image(i), g.history[i:i + num_unroll_steps],
+						 g.make_target(i, num_unroll_steps, td_steps, g.to_play()))
+						for (g, i) in game_pos]
+
+	def sample_game(self) -> Game:
+		# Sample game from buffer either uniformly or according to some priority.
+		return self.buffer[0]
+
+	def sample_position(self, game) -> int:
+		# Sample position from game either uniformly or according to some priority.
+		return -1
+
 def player():
 	g=Game()
 	b=Environment(g=g)
