@@ -47,19 +47,31 @@ class Environment:
 		if reverse:
 			line=line[::-1]#reverse
 		return line
-	def step(self,drc):#up down left right
-		if drc==0:
+	def step(self,action):#up down left right
+		beforescore=self.score
+		if action==0:
 			for i in range(4):
 				self.grid[0][i],self.grid[1][i],self.grid[2][i],self.grid[3][i]=self.movealine([self.grid[0][i],self.grid[1][i],self.grid[2][i],self.grid[3][i]],False)
-		elif drc==1:
+		elif action==1:
 			for i in range(4):
 				self.grid[0][i],self.grid[1][i],self.grid[2][i],self.grid[3][i]=self.movealine([self.grid[0][i],self.grid[1][i],self.grid[2][i],self.grid[3][i]],True)
-		elif drc==2:
+		elif action==2:
 			for i in range(4):
 				self.grid[i][0],self.grid[i][1],self.grid[i][2],self.grid[i][3]=self.movealine([self.grid[i][0],self.grid[i][1],self.grid[i][2],self.grid[i][3]],False)
-		elif drc==3:
+		elif action==3:
 			for i in range(4):
 				self.grid[i][0],self.grid[i][1],self.grid[i][2],self.grid[i][3]=self.movealine([self.grid[i][0],self.grid[i][1],self.grid[i][2],self.grid[i][3]],True)
+		if 0<=action and action<=3:
+			return self.score-beforescore
+		if 4<=action and action<=19:
+			action-=4
+			self.grid[action//4][action%4]=1
+		if 20<=action and action<=35:
+			action-=20
+			self.grid[action//4][action%4]=2
+		if action<0 or action>35:
+			raise BaseException('action('+str(action)+') out of range [0,35]')
+		return 0
 	def dump(self):
 		for i in self.grid:
 			for j in i:

@@ -21,17 +21,17 @@ def default_visit_softmax_temperature(num_moves,training_steps):
 	  return 0.25
 class Config:
 	def __init__(self,
-				action_space_size:int=4,
-				max_moves:int=1e5,#it can be infinity because any 2048 game is bound to end
-				discount:float=0.9,
-				dirichlet_alpha:float=0.3,
-				num_simulations:int=100,
-				batch_size:int=1024,
-				td_steps:int=15,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
-				num_actors:int=1000,
-				lr_init:float=0.1,
-				lr_decay_steps:float=35e3,
-				visit_softmax_temperature_fn=default_visit_softmax_temperature,
+				action_space_size:int,
+				max_moves:int,
+				discount:float,
+				dirichlet_alpha:float,
+				num_simulations:int,
+				batch_size:int,
+				td_steps:int,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
+				num_actors:int,
+				lr_init:float,
+				lr_decay_steps:float,
+				visit_softmax_temperature_fn,
 				known_bounds:Optional[KnownBounds]=None):
 	### Self-Play
 	self.action_space_size=action_space_size
@@ -74,8 +74,23 @@ class Config:
 
 	def new_game(self):
 		return Game(self.action_space_size,self.discount)
+def default_config():
+	return Config(action_space_size=4,
+				max_moves=1e5,#it can be infinity because any 2048 game is bound to end
+				discount=0.9,
+				dirichlet_alpha=0.3,
+				num_simulations=100,
+				batch_size=1024,
+				td_steps=15,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
+				num_actors=1000,
+				lr_init=0.1,
+				lr_decay_steps=35e3,
+				visit_softmax_temperature_fn=default_visit_softmax_temperature)
 class Action:
-	def __init__(self,index:int):#up,down,left,right
+	#0~3:up,down,left,right
+	#starting from 4:put a tile, 4~19 for putting a 2, 20~35 for putting a 4
+	#(treat putting a tile as an action)
+	def __init__(self,index:int):
 		self.index = index
 	def __hash__(self):
 		return self.index
@@ -85,13 +100,13 @@ class Action:
 		return self.index > other.index
 class Game:
 	# Game is not responsible for record game
-	def __init__(self,action_space_size:int,discount:float):
+	def __init__(self,config:Config):
 		self.environment=Environment()  # Game specific environment.
 		self.history=[]
 		self.child_visits=[]
 		self.root_values=[]
-		self.action_space_size=action_space_size
-		self.discount=discount
+		self.action_space_size=config.action_space_size
+		self.discount=config.discount
 	def terminal(self)->bool:
 		# if the game ends
 		return self.environment.finish()
