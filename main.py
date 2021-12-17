@@ -3,7 +3,7 @@ from copy import copy,deepcopy
 #from network import nn
 import numpy as np
 from time import time,sleep
-from environment import Environment
+from environment import Environment,Action
 bg   ="\x1b[48;5;"
 word ="\x1b[38;5;"
 end  ="m"
@@ -12,6 +12,9 @@ reset="\x1b[0m"
 assumption:
 total training steps=1e5 or less
 '''
+def get_features(grid):#given grid, return features for Network input
+	pass
+	### TODO
 def default_visit_softmax_temperature(num_moves,training_steps):
 	if training_steps < 50e3:
 	  return 1.0
@@ -86,23 +89,11 @@ def default_config():
 				lr_init=0.1,
 				lr_decay_steps=35e3,
 				visit_softmax_temperature_fn=default_visit_softmax_temperature)
-class Action:
-	#0~3:up,down,left,right
-	#starting from 4:put a tile, 4~19 for putting a 2, 20~35 for putting a 4
-	#(treat putting a tile as an action)
-	def __init__(self,index:int):
-		self.index = index
-	def __hash__(self):
-		return self.index
-	def __eq__(self, other):
-		return self.index == other.index
-	def __gt__(self, other):
-		return self.index > other.index
 class Game:
 	# Game is not responsible for record game
 	def __init__(self,config:Config):
 		self.environment=Environment()  # Game specific environment.
-		self.history=[]
+		self.history=[]#List[Action]
 		self.child_visits=[]
 		self.root_values=[]
 		self.action_space_size=config.action_space_size
@@ -118,8 +109,10 @@ class Game:
 		reward = self.environment.step(action)
 		self.rewards.append(reward)
 		self.history.append(action)
-
+### TODO:action 0~3 (move) is to be chosen by agent, but putting a tile should be randomly chosen.
+### will deal with store search stats, etc
 	def store_search_statistics(self, root: Node):
+		#root.children is Dict[Node] whose keys are actions
 		sum_visits = sum(child.visit_count for child in root.children.values())
 		action_space = (Action(index) for index in range(self.action_space_size))
 		self.child_visits.append([
@@ -128,9 +121,20 @@ class Game:
 		])
 		self.root_values.append(root.value())
 
-	def make_image(self, state_index: int):
+	def make_image(self, state_index: int):#-1 means the last
 		# Game specific feature planes.
-		return []
+		# Go through history
+		tmpenv=Environment()
+		if state_index==-1:
+			for action in self.history:
+				tmpenv.step(action)
+		elif 0<=state_index and state_index<=len(self.history):
+			# do history[:state_index]
+			for action in self.history[:state_index]:
+				tmpenv.step(action)
+		else:
+			raise BaseException('state_index('+str(state_index)+') is out of range('+str(len(self.history))+') (in Game.make_image)')
+		return get_features(tmpenv.grid)
 
 	def make_target(self, state_index: int, num_unroll_steps: int, td_steps: int,
 									to_play: Player):
