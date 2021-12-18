@@ -212,8 +212,7 @@ class Game:
 			raise BaseException('state_index('+str(state_index)+') is out of range('+str(len(self.history))+') (in Game.make_image)')
 		return get_features(tmpenv.grid)
 
-	def make_target(self, state_index: int, num_unroll_steps: int, td_steps: int,
-									to_play: Player):
+	def make_target(self, state_index: int, num_unroll_steps: int, td_steps: int):#return type List[Tuple(value_target,reward_target,policy_target) policy might not have a sum of 1
 		# The value target is the discounted root value of the search tree N steps
 		# into the future, plus the discounted sum of all rewards until then.
 		targets = []
@@ -261,7 +260,7 @@ class Game:
 			self.data=eval(F.readline())
 			self.moves=eval(F.readline())
 class ReplayBuffer():### Starting from here next time
-	def __init__(self, config: MuZeroConfig):
+	def __init__(self, config: Config):
 		self.window_size = config.window_size
 		self.batch_size = config.batch_size
 		self.buffer = []
@@ -275,19 +274,19 @@ class ReplayBuffer():### Starting from here next time
 		self.buffer.append(game)
 		
 	def sample_batch(self, num_unroll_steps: int, td_steps: int):
-		games = [self.sample_game() for _ in range(self.batch_size)]
-		game_pos = [(g, self.sample_position(g)) for g in games]
-		return [(g.make_image(i), g.history[i:i + num_unroll_steps],
-						 g.make_target(i, num_unroll_steps, td_steps, g.to_play()))
+		games=self.sample_n_games(self.batch_size)
+		game_pos=[(g,self.sample_position(g))for g in games]
+		return [(g.make_image(i),g.history[i:i+num_unroll_steps],
+						 g.make_target(i,num_unroll_steps))
 						for (g, i) in game_pos]
 
-	def sample_game(self) -> Game:
+	def sample_n_games(self,n_games) -> numpy.ndarray[Game]:
 		# Sample game from buffer either uniformly or according to some priority.
-		return self.buffer[0]
+		return numpy.random.choice(self.buffer, n_games)
 
 	def sample_position(self, game) -> int:
 		# Sample position from game either uniformly or according to some priority.
-		return -1
+		return numpy.random.choice(len(game_history.root_values))
 
 def player():
 	g=Game()
