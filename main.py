@@ -90,7 +90,7 @@ class Config:
 	###Training
 	self.training_steps=int(100e3)
 	self.checkpoint_interval=int(5e2)
-	self.window_size=int(1e6)
+	self.window_size=int(1e6)#max game cnt stored in replaybuffer
 	self.batch_size=batch_size
 	self.num_unroll_steps=5
 	self.td_steps=td_steps
@@ -217,12 +217,13 @@ class Game:
 		# The value target is the discounted root value of the search tree N steps
 		# into the future, plus the discounted sum of all rewards until then.
 		targets = []
-		for current_index in range(state_index, state_index + num_unroll_steps + 1,2):#calc every 2 moves, only makes target for type0(move)
+		for current_index in range(state_index, state_index + num_unroll_steps + 1):
 			bootstrap_index = current_index + td_steps
-			if bootstrap_index < len(self.root_values):
-				value = self.root_values[bootstrap_index] * self.discount**td_steps
-			else:
-				value = 0
+			if bootstrap_index>len(self.root_values)-1:
+				break
+			if self.type[bootstrap_index]==1:
+				continue#only makes target for type0(move)
+			value = self.root_values[bootstrap_index] * self.discount**td_steps
 			dis=1
 			for reward in self.rewards[current_index:bootstrap_index]:
 				value += reward * dis	# pytype: disable=unsupported-operands
@@ -264,7 +265,10 @@ class ReplayBuffer():### Starting from here next time
 		self.window_size = config.window_size
 		self.batch_size = config.batch_size
 		self.buffer = []
-		
+		#In werner-duvaud/muzero-general, buffer is dict, which keys are increasing index, and values are corresponding games.
+		#In this way, update priority(described in Muzero P.15 Appendix G Training) and update game history are easier to implement
+		#I haven't decided how to store buffer now.
+		#Maybe I won't use priority, therefore no need for using dict.
 	def save_game(self, game):
 		if len(self.buffer) > self.window_size:
 			self.buffer.pop(0)
