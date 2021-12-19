@@ -33,7 +33,7 @@ KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
 class MinMaxStats():
 	"""A class that holds the min-max values of the tree."""
 
-	def __init__(self,known_bounds:Optional[KnownBounds]):
+	def __init__(self,known_bounds:KnownBounds):
 		self.maximum=known_bounds.max if known_bounds else -MAXIMUM_FLOAT_VALUE
 		self.minimum=known_bounds.min if known_bounds else MAXIMUM_FLOAT_VALUE
 		#any update is accepted
@@ -56,62 +56,67 @@ class Config:
 				discount:float,
 				dirichlet_alpha:float,
 				num_simulations:int,
+				board_size:int,
 				batch_size:int,
 				td_steps:int,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
-				num_actors:int,
+				num_actors:int,#how many games run at same time
 				lr_init:float,
 				lr_decay_steps:float,
 				visit_softmax_temperature_fn,
-				known_bounds:Optional[KnownBounds]=None):
-	### Self-Play
-	self.action_space_type0_size=action_space_type0_size
-	self.action_space_type1_size=action_space_type1_size
-	self.num_actors=num_actors
+				known_bounds:KnownBounds=None):
+		### Self-Play
+		self.action_space_type0_size=action_space_type0_size
+		self.action_space_type1_size=action_space_type1_size
+		self.num_actors=num_actors
+		self.board_size=board_size
 
-	self.visit_softmax_temperature_fn=visit_softmax_temperature_fn
-	self.max_moves=max_moves
-	self.num_simulations=num_simulations
-	self.discount=discount
+		self.visit_softmax_temperature_fn=visit_softmax_temperature_fn
+		self.max_moves=max_moves
+		self.num_simulations=num_simulations
+		self.discount=discount
 
-	# Root prior exploration noise.
-	self.root_dirichlet_alpha=dirichlet_alpha
-	self.root_exploration_fraction=0.25
+		# Root prior exploration noise.
+		self.root_dirichlet_alpha=dirichlet_alpha
+		self.root_exploration_fraction=0.25
 
-	# UCB formula
-	self.pb_c_base=19652
-	self.pb_c_init=1.25
+		# UCB formula
+		self.pb_c_base=19652
+		self.pb_c_init=1.25
 
-	# If we already have some information about which values occur in the
-	# environment, we can use them to initialize the rescaling.
-	# This is not strictly necessary, but establishes identical behaviour to
-	# AlphaZero in board games.
-	self.known_bounds=known_bounds
+		# If we already have some information about which values occur in the
+		# environment, we can use them to initialize the rescaling.
+		# This is not strictly necessary, but establishes identical behaviour to
+		# AlphaZero in board games.
+		self.known_bounds=known_bounds
 
-	###Training
-	self.training_steps=int(100e3)
-	self.checkpoint_interval=int(5e2)
-	self.window_size=int(1e6)#max game cnt stored in replaybuffer
-	self.batch_size=batch_size
-	self.num_unroll_steps=5
-	self.td_steps=td_steps
+		###Training
+		self.training_steps=int(100e3)
+		self.checkpoint_interval=int(5e2)
+		self.window_size=int(1e6)#max game cnt stored in replaybuffer
+		self.batch_size=batch_size
+		self.num_unroll_steps=5
+		self.td_steps=td_steps
 
-	self.weight_decay=1e-4
-	self.momentum=0.9
+		self.weight_decay=1e-4
+		self.momentum=0.9
 
-	#Exponentiallearningrateschedule
-	self.lr_init=lr_init
-	self.lr_decay_rate=0.1
-	self.lr_decay_steps=lr_decay_steps
+		#Exponentiallearningrateschedule
+		self.lr_init=lr_init
+		self.lr_decay_rate=0.1
+		self.lr_decay_steps=lr_decay_steps
 
 	def new_game(self):
 		return Game(self)
 
 def default_config():
-	return Config(action_space_size=4,
+	return Config(
+				action_space_type0_size=4,
+				action_space_type1_size=32,
 				max_moves=1e5,#it can be infinity because any 2048 game is bound to end
 				discount=0.97,
 				dirichlet_alpha=0.3,
 				num_simulations=100,
+				board_size=4,
 				batch_size=1024,
 				td_steps=10,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
 				num_actors=1000,
@@ -125,7 +130,7 @@ class ActionHistory():
 	Only used to keep track of the actions executed.
 	"""
 
-	def __init__(self, history: List[Action], action_space_size: int):
+	def __init__(self, history:'List[Action]', action_space_size: int):
 		self.history = list(history)
 		self.action_space_size = action_space_size
 
@@ -138,7 +143,7 @@ class ActionHistory():
 	def last_action(self) -> Action:
 		return self.history[-1]
 
-	def action_space(self) -> List[Action]:
+	def action_space(self) -> 'List[Action]':
 		return [Action(i) for i in range(self.action_space_size)]
 
 class Node():
@@ -161,7 +166,7 @@ class Node():
 class Game:
 	# In any game, the first two actions are adding tile, then each move is followed by adding tile
 	def __init__(self,config:Config):
-		self.environment=Environment()  # Game specific environment.
+		self.environment=Environment(config)  # Game specific environment.
 		self.history=[]#List[Action]
 		self.type=[]#0:move,1:adding tile # will also stored in Node
 		self.child_visits=[]
@@ -174,7 +179,7 @@ class Game:
 		# if the game ends
 		return self.environment.finish()
 		
-	def legal_actions(self)->List[Action]:
+	def legal_actions(self)->'List[Action]':
 		# list of legal actions, only care about move
 		return self.environment.legal_actions()
 		
@@ -280,17 +285,21 @@ class ReplayBuffer():### Starting from here next time
 						 g.make_target(i,num_unroll_steps))
 						for (g, i) in game_pos]
 
-	def sample_n_games(self,n_games) -> numpy.ndarray[Game]:
+	def sample_n_games(self,n_games) -> 'np.ndarray[Game]':
 		# Sample game from buffer either uniformly or according to some priority.
-		return numpy.random.choice(self.buffer, n_games)
+		return np.random.choice(self.buffer, n_games)
 
 	def sample_position(self, game) -> int:
 		# Sample position from game either uniformly or according to some priority.
-		return numpy.random.choice(len(game_history.root_values))
+		return np.random.choice(len(game_history.root_values))
 
 def player():
-	g=Game()
-	b=Environment(g=g)
+	config=default_config()
+	sz=10
+	config.board_size=sz
+	b=Environment(config)
+	b.add()
+	b.add()
 	l=0
 	while not b.finish():
 		b.dump()
@@ -303,13 +312,11 @@ def player():
 				valid=True
 				try:a=int(input())
 				except:valid=False
-				if a>3 or a<0:
+				if a>sz-1 or a<0:
 					valid=False
-			if b.valid(a):
-				b.step(a)
-				x,y,v=b.add()
-				g.addrand(x,y,v)
+			if b.valid(Action(a)):
+				b.step(Action(a))
+				b.add()
 				done=True
 	b.dump()
-	g.write('test.sgf')
 player()
