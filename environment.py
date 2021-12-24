@@ -87,12 +87,12 @@ class Environment:
 			
 		tmp-=4
 		if 0<=tmp and tmp<self.board_size**2:
-			self.grid[tmp//4][tmp%4]=1
+			self.grid[tmp//self.board_size][tmp%self.board_size]=1
 			return 0
 			
 		tmp-=self.board_size**2
 		if 0<=tmp and tmp<=self.board_size**2:
-			self.grid[tmp//4][tmp%4]=2
+			self.grid[tmp//self.board_size][tmp%self.board_size]=2
 			return 0
 		raise BaseException('action('+str(action.index)+') out of range (in Environment.step)')
 	def dump(self):

@@ -293,6 +293,8 @@ class ReplayBuffer():### Starting from here next time
 		# Sample position from game either uniformly or according to some priority.
 		return np.random.choice(len(game_history.root_values))
 
+NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state','value','policy_logits'])
+
 def player():
 	config=default_config()
 	sz=10
@@ -312,7 +314,7 @@ def player():
 				valid=True
 				try:a=int(input())
 				except:valid=False
-				if a>sz-1 or a<0:
+				if a>3 or a<0:
 					valid=False
 			if b.valid(Action(a)):
 				b.step(Action(a))
