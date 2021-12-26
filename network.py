@@ -1,142 +1,128 @@
-import tensorflow as tf
 import numpy as np
-#the use of this file will be in the mcts.py
-#if I use tpu, optimizer must handle by "tf.tpu.CrossShardOptimizer" to cross more than one tpus.And then use it as GPU!!!
-inputs=tf.keras.Input(shape=(4,4,18))#from 0 to 17, 0 to 131072
-conv1=tf.keras.layers.Conv2D(
-	filters=10,
-	kernel_size=(2,1),padding="same",
-	activation=None,
-	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
-	)(inputs)
-conv2=tf.keras.layers.Conv2D(
-	filters=10,
-	kernel_size=(1,2),padding="same",
-	activation=None,
-	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
-	)(inputs)
-conv=tf.keras.layers.Concatenate(axis=-1)([conv1,conv2])#last axis, channel
-conv1=tf.keras.layers.Conv2D(
-	filters=10,
-	kernel_size=(2,1),padding="same",
-	activation=None,
-	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
-	)(conv)
-conv2=tf.keras.layers.Conv2D(
-	filters=10,
-	kernel_size=(1,2),padding="same",
-	activation=None,
-	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
-	)(conv)
-conv=tf.keras.layers.Concatenate(axis=-1)([conv1,conv2])#last axis, channel
-conv1=tf.keras.layers.Conv2D(
-	filters=10,
-	kernel_size=(2,1),padding="same",
-	activation=None,
-	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
-	)(inputs)
-conv2=tf.keras.layers.Conv2D(
-	filters=10,
-	kernel_size=(1,2),padding="same",
-	activation=None,
-	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
-	)(inputs)
-conv=tf.keras.layers.Concatenate(axis=-1)([conv1,conv2])#last axis, channel
-conv1=tf.keras.layers.Conv2D(
-	filters=10,
-	kernel_size=(2,1),padding="same",
-	activation=None,
-	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
-	)(conv)
-conv2=tf.keras.layers.Conv2D(
-	filters=10,
-	kernel_size=(1,2),padding="same",
-	activation=None,
-	kernel_regularizer=tf.keras.regularizers.l2(1e-4)
-	)(conv)
-conv=tf.keras.layers.Concatenate(axis=-1)([conv1,conv2])#last axis, channel
-flatten=tf.keras.layers.Flatten()(conv)
-policy=tf.keras.layers.Dense(units=10,kernel_regularizer=tf.keras.regularizers.l2(1e-4))(flatten)
-policy=tf.keras.layers.Dense(units=4,activation='softmax',kernel_regularizer=tf.keras.regularizers.l2(1e-4),name='policy')(flatten)
-'''
-predictions = {
-	'policy': tf.keras.layers.Softmax(name='policy_head')(policy_head_output),
-	'value' : tf.identity(value_head_output, name='value_head')
-}
-if mode == tf.estimator.ModeKeys.PREDICT:
-	return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
-policy_loss = tf.nn.softmax_cross_entropy_with_logits(labels=labels['policy'], logits=policy_head_output)# it does soft max to logits before cross entropy
-#its output is an array, needing to reduce mean to a scalar
-policy_loss = tf.reduce_mean(policy_loss)
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import Model,layers,optimizers,losses
+from time import time,sleep
+import collections
+from abc import ABC,abstractmethod
 
-value_loss = tf.losses.mean_squared_error(labels=labels['value'], predictions=value_head_output)
-value_loss = tf.reduce_mean(value_loss)
+def scale_hidden_state(to_scale_hidden_state,hidden_state_as_matrix):
+	shape=to_scale_hidden_state.shape
+	if hidden_state_as_matrix:
+		to_scale_hidden_state=tf.reshape(to_scale_hidden_state,(shape[0],-1))#flatten
+	min_encoded_state = tf.math.reduce_min(to_scale_hidden_state,axis=1,keepdims=True)
+	max_encoded_state = tf.math.reduce_max(to_scale_hidden_state,axis=1,keepdims=True)
+	scale_encoded_state = max_encoded_state - min_encoded_state
+	scale_encoded_state = tf.where(scale_encoded_state<1e-5,scale_encoded_state+1e-5,scale_encoded_state)#avoid divided by 0 or too small value
+	encoded_state_normalized = (to_scale_hidden_state - min_encoded_state) / scale_encoded_state
+	if hidden_state_as_matrix:
+		encoded_state_normalized.reshape(shape)#and reshape to original shape
+	return encoded_state_normalized
 
-regularizer = tf.keras.tf.keras.regularizers.l2(scale=1e-4)#as the alphagozero paper, c||θ||_2
-regular_variables = tf.trainable_variables()#refers to the trainable things, including all the conv2d, batchnorm, and dense.
-l2_loss = tf.contrib.layers.apply_regularization(regularizer, regular_variables)
-loss = value_loss + policy_loss + l2_loss
-loss = tf.identity(loss, name='loss')
-def learning_rate_fn(global_step):
-	#it can't be like this:
-	
-	#if global_step < 400:
-	#	return 1e-2
-	#elif global_step < 600:
-	#	return 1e-3
-	#return 1e-4
-	
-	boundaries = [400,600]
-	learning_rates = [1e-2,1e-3,1e-4]
-	lr = tf.train.piecewise_constant(global_step, boundaries, learning_rates)
-if mode == tf.estimator.ModeKeys.TRAIN:
-	global_step = tf.train.get_or_create_global_step()
-	learning_rate = learning_rate_fn(global_step)
-	
-	optimizer = tf.train.MomentumOptimizer(
-		learning_rate=learning_rate,
-		momentum=0.9
-	)#continue here
-	train_op = optimizer.minimize(
-		loss=loss,
-		global_step=global_step#which is a variable
-	)
-	return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
-#no evaluate mode
-def input_fn(features, labels, training=False, batch_size=256):
-	"""An input function for training or predicting"""
-	# Convert the inputs to a Dataset.
-	dataset = tf.data.Dataset.from_tensor_slices((features, labels))
-
-	# Shuffle and repeat if you are in training mode.
-	if training:
-		dataset = dataset.shuffle(1000).repeat()
+NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state','value','policy'])
+#observation:		in shape of (batch_size,channels,board_size_x,board_size_y)#board_size_x=board_size_y in most cases
+#channels=history_length*planes per image
+#hidden_state:		in shape of (batch_size,hidden_state_size(32))
+#					or (batch_size,hidden_state_size_x,hidden_state_size_y)
+#action:			one-hotted, in shape of (batch_size,4+boardsize**2)
+#policy:			in shape of (batch_size,4(UDLR))
+#value and reward:	in shape of (batch_size,full_support_size) if using support, else (batch_size,1) #about "support", described at config.py:53
+class AbstractNetwork(ABC):
+	def __init__(self):
+		super().__init__()
+		pass
 		
-	return dataset.batch(batch_size)
-'''
-class nn:
-	def __init__(self,init=False):
-		if init:
-			self.model=tf.keras.Model(inputs=inputs,outputs=policy)
-			self.model.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=0.01,momentum=0.9,name='SGD'),loss='categorical_crossentropy',metrics=['accuracy'])
-		else:
-			self.model=None
-	def train(self,data,label,epoch=10):
-		self.model.fit(data,label,epochs=epoch,steps_per_epoch=100,batch_size=128)
-	def predict(self,data):
-		return self.model.predict(data)
-	def save(self,name):
-		self.model.save(name)
-	def load(self,name):
-		self.model=tf.contrib.keras.models.load_model(name)
-'''
-nn=nn(True)
-x=np.random.randint(2,size=(1024,4,4,18)).astype('float32')
-y=np.random.randint(100,size=(1024,4)).astype('float32')
-for i in range(1024):
-	total=sum(y[i])
-	for j in range(4):
-		y[i][j]/=total
-nn.train(x,y)
-nn.save('random.h5')
-'''
+	@abstractmethod
+	def representation(self,observation):
+		#output:hidden_state
+		pass
+		
+	@abstractmethod
+	def dynamics(self,hidden_state,action):
+		#output:hidden_state,reward
+		pass
+		
+	@abstractmethod
+	def prediction(self,hidden_state):
+		#output:policy,value
+		pass
+	
+	def initial_inference(self,observation)->NetworkOutput:
+		hidden_state=self.representation(observation)
+		policy,value=self.prediction(hidden_state)
+		return NetworkOutput(reward=0,hidden_state=hidden_state,value=value,policy=policy)
+
+	def recurrent_inference(self,hidden_state,action)->NetworkOutput:
+		new_hidden_state,reward=self.dynamics(hidden_state,action)
+		policy,value=self.prediction(new_hidden_state)
+		return NetworkOutput(reward=reward,hidden_state=new_hidden_state,value=value,policy=policy)
+		
+class FullyConnectedNetwork(AbstractNetwork):
+	def __init__(self,config):
+		super().__init__()
+		#config
+		self.action_space=4+config.board_size**2#UDLR and adding tiles
+		if config.support:
+			self.full_support_size=2*config.support_size+1
+		#list meaning size of hidden layers
+		self.representation_size=config.representation_size
+		
+		self.dynamics_size=config.dynamics_size
+		self.dynamics_hidden_state_head_size=config.dynamics_hidden_state_head_size
+		self.dynamics_reward_head_size=config.dynamics_reward_head_size
+		
+		self.prediction_size=config.prediction_size
+		self.prediction_value_head_size=config.prediction_value_head_size
+		self.prediction_policy_head_size=config.prediction_policy_head_size
+		#network
+		
+	class representation_model(tf.keras.Model):
+		def __init__(self,input_size,representation_size,output_size):
+			super().__init__()
+			self.layers=[]
+			for size in representation_size+[output_size]:
+				self.layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
+		def call(self,x,training=False):
+			for layer in self.layers:
+				x=layer(x)
+			return x
+			
+	class dynamics_model(tf.keras.Model):
+		def __init__(self,
+				input_size,
+				dynamics_size,
+				dynamics_hidden_state_head_size,
+				dynamics_reward_head_size,
+				hidden_state_size,
+				reward_size):
+			super().__init__()
+			self.common_layers=[]
+			self.hidden_state_head_layers=[]
+			self.reward_head_layers=[]
+			
+			for size in dynamics_size:
+				self.common_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
+				
+			for size in dynamics_hidden_state_head_size+[hidden_state_size]:
+				self.hidden_state_head_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
+				
+			for size in dynamics_reward_head_size+[reward_size]:
+				self.reward_head_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
+		def call(self,x,training=False):
+			for layer in self.common_layers:
+				x=layer(x)
+			
+			hidden_state=x
+			for layer in self.hidden_state_hard_layers:
+				hidden_state=layer(hidden_state)
+			
+			reward=x
+			for layer in self.reward_head_layers:
+				reward=layer(reward)
+			return hidden_state,reward
+			
+	def representation(self,observation):
+		return scale_hidden_state(self.representation_model(observation),False)
+	def dynamics(self,hidden_state,action):
+		hidden_state,reward=self.dynamics_network(hidden_state,action)
+		
