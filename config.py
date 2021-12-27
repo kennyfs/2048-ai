@@ -23,8 +23,8 @@ class Config:
 				visit_softmax_temperature_fn,
 				known_bounds=None):
 		### Self-Play
-		self.action_space_type0_size=action_space_type0_size
-		self.action_space_type1_size=action_space_type1_size
+		self.action_space_type0_size=4
+		self.action_space_type1_size=board_size**2
 		self.num_actors=num_actors
 		self.board_size=board_size
 
@@ -47,17 +47,20 @@ class Config:
 		# AlphaZero in board games.
 		self.known_bounds=known_bounds
 		### Network info
-		self.hidden_state_size=32
+		self.observation_channels=self.board_size**2
 		self.network_type='fullyconnected'#'resnet'/'fullyconnected'/...
-		self.support=False# whether to use support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
+		self.support=0# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
+		#this = 0 means not using support
 		
 		# Fully Connected Network
-		self.encoding_size = 32
-		self.fc_representation_layers = []  # Define the hidden layers in the representation network
-		self.fc_dynamics_layers = [64]  # Define the hidden layers in the dynamics network
-		self.fc_reward_layers = [64]  # Define the hidden layers in the reward network
-		self.fc_value_layers = []  # Define the hidden layers in the value network
-		self.fc_policy_layers = []
+		self.hidden_state_size=32
+		self.representation_size=[32,32,32]# Define the hidden layers in the representation network
+		self.dynamics_size=[32,32]# Define the hidden layers in the common parts of the dynamics network
+		self.dynamics_hidden_state_head_size=[32]# Define the hidden layers in hidden state head of the dynamics network
+		self.dynamics_reward_head_size=[32]# Define the hidden layers in reward head of the dynamics network
+		self.prediction_size=[32,32]# Define the hidden layers in the common parts of the prediction network
+		self.prediction_value_head_size=[32]# Define the hidden layers in value head of the prediction network
+		self.prediction_policy_head_size=[32]# Define the hidden layers in policy head of the prediction network
 		
 		### Training
 		self.training_steps=int(100e3)
