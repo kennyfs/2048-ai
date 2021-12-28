@@ -57,6 +57,12 @@ class AbstractNetwork(ABC):
 		policy,value=self.prediction(new_hidden_state)
 		return NetworkOutput(reward=reward,hidden_state=new_hidden_state,value=value,policy=policy)
 		
+class Network:
+	def __new__(cls,config):
+		if config.network_type=="fullyconnected":
+			return FullyConnectedNetwork(config)
+		else:
+			raise NotImplementedError
 class FullyConnectedNetwork(AbstractNetwork):
 	def __init__(self,config):
 		super().__init__()

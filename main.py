@@ -99,7 +99,7 @@ class ReplayBuffer():### Starting from here next time
 	def sample_batch(self, num_unroll_steps: int, td_steps: int):
 		games=self.sample_n_games(self.batch_size)
 		game_pos=[(g,self.sample_position(g))for g in games]
-		return [(g.make_image(i),g.history[i:i+num_unroll_steps],
+		return [(g.make_history_images(i),g.history[i:i+num_unroll_steps],
 						 g.make_target(i,num_unroll_steps))
 						for (g, i) in game_pos]
 
