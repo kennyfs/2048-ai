@@ -67,6 +67,7 @@ class FullyConnectedNetwork(AbstractNetwork):
 	def __init__(self,config):
 		super().__init__()
 		#config
+		self.config=config
 		if config.support:
 			self.full_support_size=2*config.support_size+1
 		else:
@@ -95,7 +96,7 @@ class FullyConnectedNetwork(AbstractNetwork):
 	class one_output_model(tf.keras.Model):
 		def __init__(self,input_size,sizes,output_size):
 			super().__init__()
-			self.layers=[]
+			self.layers=[tf.keras.layers.Flatten()]
 			for size in sizes+[output_size]:
 				self.layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
 		def call(self,x,training=False):

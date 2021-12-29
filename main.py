@@ -15,13 +15,6 @@ reset="\x1b[0m"
 assumption:
 total training steps=1e5 or less
 '''
-def get_features(grid):#given grid, return features for Network input
-	sz=len(grid)
-	grid=np.array(grid)
-	result=[]
-	for i in range(1,sz*sz+1):
-		result.append(np.where(grid==i,1.0,0.0))
-	return np.array(result)
 	  
 MAXIMUM_FLOAT_VALUE=float('inf')
 KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
