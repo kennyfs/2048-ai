@@ -11,7 +11,7 @@ class MCTS:
 
 	def __init__(self, config):
 		self.config = config
-	def run(self,
+	async def run(self,
 			model,
 			observation,
 			legal_actions,
@@ -28,7 +28,7 @@ class MCTS:
 			root_predicted_value = None
 		else:
 			root = Node(0)
-			output=model.initial_inference(observation)
+			output=await model.initial_inference(observation)
 			
 			root_predicted_value=output.value
 			reward=output.reward

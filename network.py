@@ -148,3 +148,58 @@ class FullyConnectedNetwork(AbstractNetwork):
 	def prediction(self,hidden_state):
 		policy,value=self.prediction_model(hidden_size)
 		return policy,value
+QueueItem=collections.namedtuple("QueueItem",['inputs','future'])
+class Manager:
+	def __init__(self,representation_func,dynamics_func,prediction_func,max_threads=3000):
+		self.loop=asyncio.get_event_loop()
+		
+		self.representation=representation_func
+		self.dynamics=dynamics_func
+		self.prediction=prediction_func
+		
+		self.representation_queue=asyncio.queues.Queue(max_threads)
+		self.dynamics_queue=asyncio.queues.Queue(max_threads)
+		self.prediction_queue=asyncio.queues.Queue(max_threads)
+		
+		self.coroutine_list=[self.prediction_worker()]
+		async def push_queue(features,network->str):#network means which to use
+			future=self.loop.create_future()
+			item=QueueItem(inputs,future)
+			if network=='representation'):
+				await self.representation_queue.put(item)
+			if network=='dynamics'):
+				await self.dynamics_queue.put(item)
+			if network=='prediction'):
+				await self.prediction_queue.put(item)
+			return future
+		self.push_queue_func=push_queue
+		
+	def add_coroutine_list(self,toadd):
+		if toadd not in self.coroutine_list:
+			self.coroutine_list.append(toadd)
+			
+	def run_coroutine_list(self):
+		ret=self.loop.run_until_complete(asyncio.gather(*(self.coroutine_list)))
+		self.coroutine_list=[self.prediction_worker()]
+		return ret
+	async def prediction_worker(self):
+		"""For better performance, queueing prediction requests and predict together in this worker.
+		speed up about 3x.
+		"""
+		margin = 10  # avoid finishing before other searches starting.
+		while margin > 0:
+			if q.empty():
+				await asyncio.sleep(1e-3)
+				if q.empty() and margin > 0:
+					margin -= 1
+				continue
+			for queue,func in zip((self.representation_queue,self.dynamics_queue,self.prediction_queue),(self.representation,self.dynamics,self.prediction)):
+				item_list = [queue.get_nowait() for _ in range(queue.qsize())]  # type: list[QueueItem]
+				inputs=np.concatenate([np.expand_dims(item.inputs,axis=0) for item in item_list])
+				print('nn',len(item_list))
+				with tf.device('/device:GPU:0'):
+					#start=time()
+					results = self.forward(features)
+					#print('inference:',time()-start)
+				for a,b,c,d,e,item in zip(*results,item_list):
+					item.future.set_result((a,b,c,d,e))
