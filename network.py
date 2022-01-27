@@ -5,11 +5,12 @@ from tensorflow.keras import Model,layers,optimizers,losses
 from time import time,sleep
 import collections
 from abc import ABC,abstractmethod
+from copy import deepcopy as dc
 
-def scale_hidden_state(to_scale_hidden_state,hidden_state_as_matrix):
+def scale_hidden_state(to_scale_hidden_state->np.array,hidden_state_as_matrix=False):
 	shape=to_scale_hidden_state.shape
 	if hidden_state_as_matrix:
-		to_scale_hidden_state=tf.reshape(to_scale_hidden_state,(shape[0],-1))#flatten
+		to_scale_hidden_state=tf.reshape(to_scale_hidden_state,(shape[0],-1))#flatten from [batch_size,hidden_state_size_x,hidden_state_size_y] to [batch_size,hidden_state_size_x*hidden_state_size_y]
 	min_encoded_state = tf.math.reduce_min(to_scale_hidden_state,axis=1,keepdims=True)
 	max_encoded_state = tf.math.reduce_max(to_scale_hidden_state,axis=1,keepdims=True)
 	scale_encoded_state = max_encoded_state - min_encoded_state
@@ -19,12 +20,34 @@ def scale_hidden_state(to_scale_hidden_state,hidden_state_as_matrix):
 		encoded_state_normalized.reshape(shape)#and reshape to original shape
 	return encoded_state_normalized
 
+def support_to_scalar(logits, support_size):# logits is in shape (batch_size,full_support_size)
+	"""
+	Transform a categorical representation to a scalar
+	See paper appendix F Network Architecture (P.14)
+	"""
+	# Decode to a scalar
+	probabilities=tf.nn.softmax(logits)
+	support=tf.range(-support_size,support_size+1,delta=1,dtype=tf.float32) # in shape (1,full_support_size)
+	support=tf.expand_dims(support,axis=0)
+	support=tf.tile(support,(probabilities.shape[0],1))
+	x = tf.reduce_sum(support * probabilities, axis=1)
+
+	# Invert the scaling (defined in https://arxiv.org/abs/1805.11593)
+	x = tf.math.sign(x) * (
+		((tf.math.sqrt(1 + 4 * 0.001 * (tf.math.abs(x) + 1 + 0.001)) - 1) / (2 * 0.001))
+		** 2
+		- 1
+	)
+	return x
+
 NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state','value','policy'])
+
+												####shapes:###
 #observation:		in shape of (batch_size,channels,board_size_x,board_size_y)#board_size_x=board_size_y in most cases
 #channels=history_length*planes per image
 #hidden_state:		in shape of (batch_size,hidden_state_size(32))
 #					or (batch_size,hidden_state_size_x,hidden_state_size_y)
-#action:			one-hotted, in shape of (batch_size,4+boardsize**2)
+#action:			one-hotted, in shape of (batch_size,4+2*boardsize**2)
 #policy:			in shape of (batch_size,4(UDLR))
 #value and reward:	in shape of (batch_size,full_support_size) if using support, else (batch_size,1) #about "support", described at config.py:53
 class AbstractNetwork(ABC):
@@ -46,16 +69,6 @@ class AbstractNetwork(ABC):
 	def prediction(self,hidden_state):
 		#output:policy,value
 		pass
-	
-	def initial_inference(self,observation)->NetworkOutput:
-		hidden_state=self.representation(observation)#scaled
-		policy,value=self.prediction(hidden_state)
-		return NetworkOutput(reward=0,hidden_state=hidden_state,value=value,policy=policy)
-
-	def recurrent_inference(self,hidden_state,action)->NetworkOutput:
-		new_hidden_state,reward=self.dynamics(hidden_state,action)#scaled
-		policy,value=self.prediction(new_hidden_state)
-		return NetworkOutput(reward=reward,hidden_state=new_hidden_state,value=value,policy=policy)
 		
 class Network:
 	def __new__(cls,config):
@@ -63,7 +76,7 @@ class Network:
 			return FullyConnectedNetwork(config)
 		else:
 			raise NotImplementedError
-class FullyConnectedNetwork(AbstractNetwork):
+class FullyConnectedNetwork():
 	def __init__(self,config):
 		super().__init__()
 		#config
@@ -81,18 +94,18 @@ class FullyConnectedNetwork(AbstractNetwork):
 			config.representation_size,
 			config.hidden_state_size)
 		self.dynamics_model=self.two_outputs_model(
-			config.hidden_state_size+4,
+			config.hidden_state_size+4+2*config.board_size**2,
 			config.dynamics_size,
 			config.dynamics_hidden_state_head_size,
 			config.dynamics_reward_head_size,
 			config.hidden_state_size,
-			self.full_support_size)
+			self.full_support_size)#reward
 		self.prediction_model=self.two_outputs_model(
 			config.hidden_state_size,
 			config.prediction_size,
 			config.prediction_value_head_size,
-			4,
-			self.full_support_size)
+			4,#policy
+			self.full_support_size)#value
 	class one_output_model(tf.keras.Model):
 		def __init__(self,input_size,sizes,output_size):
 			super().__init__()
@@ -130,14 +143,20 @@ class FullyConnectedNetwork(AbstractNetwork):
 			for layer in self.common_layers:
 				x=layer(x)
 			
-			first=x
+			first=dc(x)
 			for layer in self.first_head_layers:
 				first=layer(first)
 			
-			second=x
+			second=dc(x)
 			for layer in self.second_head_layers:
 				second=layer(second)
 			return first,second
+			'''
+			first=first.numpy()
+			second=second.numpy()
+			return [(first[i],second[i]) for i in range(first.shape[0])]
+			'''
+			#return tf.concat((first,second),axis=1)
 			
 	def representation(self,observation):
 		return scale_hidden_state(self.representation_model(observation),False)
@@ -150,56 +169,139 @@ class FullyConnectedNetwork(AbstractNetwork):
 		return policy,value
 QueueItem=collections.namedtuple("QueueItem",['inputs','future'])
 class Manager:
-	def __init__(self,representation_func,dynamics_func,prediction_func,max_threads=3000):
-		self.loop=asyncio.get_event_loop()
+	def __init__(self,config,representation_model,dynamics_model,prediction_model,max_threads=3000):
+		self.support=config.support
 		
-		self.representation=representation_func
-		self.dynamics=dynamics_func
-		self.prediction=prediction_func
+		self.loop=asyncio.get_event_loop()
+		#callable model
+		self.representation=representation_model
+		self.dynamics=dynamics_model
+		self.prediction=prediction_model
 		
 		self.representation_queue=asyncio.queues.Queue(max_threads)
 		self.dynamics_queue=asyncio.queues.Queue(max_threads)
 		self.prediction_queue=asyncio.queues.Queue(max_threads)
 		
 		self.coroutine_list=[self.prediction_worker()]
-		async def push_queue(features,network->str):#network means which to use
+		async def push_queue_func(features,network->str):#network means which to use. If passing string consumes too much time, pass int instead.
 			future=self.loop.create_future()
 			item=QueueItem(inputs,future)
-			if network=='representation'):
+			if network=='representation':
 				await self.representation_queue.put(item)
-			if network=='dynamics'):
+			else if network=='dynamics':
 				await self.dynamics_queue.put(item)
-			if network=='prediction'):
+			else if network=='prediction':
 				await self.prediction_queue.put(item)
+			else:
+				raise NotImplementedError
 			return future
-		self.push_queue_func=push_queue
+		self.push_queue=push_queue_func
 		
 	def add_coroutine_list(self,toadd):
-		if toadd not in self.coroutine_list:
-			self.coroutine_list.append(toadd)
+		#if toadd not in self.coroutine_list:
+		self.coroutine_list.append(toadd)
 			
 	def run_coroutine_list(self):
 		ret=self.loop.run_until_complete(asyncio.gather(*(self.coroutine_list)))
 		self.coroutine_list=[self.prediction_worker()]
 		return ret
+	def are_all_queues_empty(self):
+		for q in (self.representation_queue,self.dynamics_queue,self.prediction_queue):
+			if not q.empty():
+				return False
+		return True
+	def get_weights(self):
+		return {'representation':self.representation.get_weights(),'dynamics':self.dynamics.get_weights(),'prediction':self.prediction.get_weights()}
+	def set_weights(self,weights):
+		'''
+		set weights of 3 networks
+		weights can be {name(str):weights(np.ndarray)}
+		or list of 3 weights [weights(np.ndarray)]
+		'''
+		if isinstance(weights,dict):
+			for name,weight in weights.items():
+				if name=='representation':
+					self.representation.set_weights(weight)
+				else if name=='dynamics':
+					self.dynamics.set_weights(weight)
+				else if name=='prediction':
+					self.prediction.set_weights(weight)
+				else:
+					raise NotImplementedError
+		elif isinstance(weights,list):
+			self.representation.set_weights(weights[0])
+			self.dynamics.set_weights(weights[1])
+			self.prediction.set_weights(weights[2])
+		else:
+			raise NotImplementedError
 	async def prediction_worker(self):
-		"""For better performance, queueing prediction requests and predict together in this worker.
+		"""For better performance, queue prediction requests and predict together in this worker.
 		speed up about 3x.
 		"""
 		margin = 10  # avoid finishing before other searches starting.
 		while margin > 0:
-			if q.empty():
+			if self.are_all_queues_empty():
 				await asyncio.sleep(1e-3)
-				if q.empty() and margin > 0:
+				if self.are_all_queues_empty():
 					margin -= 1
+					await asyncio.sleep(1e-3)
 				continue
-			for queue,func in zip((self.representation_queue,self.dynamics_queue,self.prediction_queue),(self.representation,self.dynamics,self.prediction)):
+			for name,queue,func in zip(('representation','dynamics','prediction'),(self.representation_queue,self.dynamics_queue,self.prediction_queue),(self.representation,self.dynamics,self.prediction)):
+				if queue.empty():
+					continue
 				item_list = [queue.get_nowait() for _ in range(queue.qsize())]  # type: list[QueueItem]
 				inputs=np.concatenate([np.expand_dims(item.inputs,axis=0) for item in item_list])
 				print('nn',len(item_list))
 				with tf.device('/device:GPU:0'):
-					#start=time()
-					results = self.forward(features)
-					#print('inference:',time()-start)
-				for a,b,c,d,e,item in zip(*results,item_list):
-					item.future.set_result((a,b,c,d,e))
+					start=time()
+					results = func(inputs)
+					print('inference:',time()-start)
+				if name=='representation':
+					hidden_state=scale_hidden_state(result)#scale hidden state
+					assert hidden_state.shape[0]==len(item_list), 'sizes of hidden_state('+hidden_state.shape+') and item_list('+len(item_list)+') don\'t match, this should never happen.'
+					for i in range(len(item_list)):
+						item_list[i].future.set_result(hidden_state[i])
+				else if name=='dynamics':
+					hidden_state,reward=result
+					hidden_state=scale_hidden_state(hidden_state)#scale hidden state
+					assert hidden_state.shape[0]==len(item_list) and reward.shape[0]==len(item_list), 'sizes of hidden_state('+hidden_state.shape+'), reward('+reward.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
+					if self.support:
+						reward=support_to_scalar(reward,self.support)
+					for i in range(len(item_list)):
+						item_list[i].future.set_result((hidden_state[i],reward[i]))
+				else if name=='prediction':
+					policy,value=result
+					assert policy.shape[0]==len(item_list) and value.shape[0]==len(item_list), 'sizes of policy('+policy.shape+'), value('+value.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
+					if self.support:
+						value=support_to_scalar(value,self.support)
+					for i in range(len(item_list)):
+						item_list[i].future.set_result((policy[i],value[i]))
+class Predictor:
+	def __init__(self,manager):
+		self.manager=manager
+		self.push_queue=manager.push_queue
+		
+	async def get_outputs(self,inputs,network):
+		future=await self.push_queue(inputs,network)
+		await future
+		return future.result()
+		
+	async def initial_inference(self,observation)->NetworkOutput:
+		hidden_state=scale_hidden_state(await self.get_outputs(observation,'representation'))#scaled
+		policy,value=await self.get_outputs(hidden_state,'prediction')
+		return NetworkOutput(reward=0,hidden_state=hidden_state,value=value,policy=policy)
+
+	async def recurrent_inference(self,hidden_state,action)->NetworkOutput:
+		#temporarily only for fully connected network.
+		#input shape:
+		#	hidden_state:(hidden_state_size(32)) or (hidden_state_size_x,hidden_state_size_y)
+		#	action:one-hotted, (4+2*boardsize**2)
+		hidden_state=np.expand_dims(hidden_state,axis=0)
+		action=np.expand_dims(action,axis=0)
+		inputs=np.concatenate((hidden_state,action),axis=1)
+		new_hidden_state,reward=await self.get_outputs(inputs,'dynamics')
+		new_hidden_state=scale_hidden_state(new_hidden_state)#scaled
+		
+		policy,value=await self.get_outputs(new_hidden_state,'prediction')
+		
+		return NetworkOutput(reward=reward,hidden_state=new_hidden_state,value=value,policy=policy)

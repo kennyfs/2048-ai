@@ -8,10 +8,9 @@ def default_visit_softmax_temperature(num_moves,training_steps):
 
 class Config:
 	def __init__(self,
-				action_space_type0_size:int,
-				action_space_type1_size:int,
 				max_moves:int,
 				discount:float,
+				search_threads:int,
 				dirichlet_alpha:float,
 				num_simulations:int,
 				board_size:int,
@@ -23,8 +22,10 @@ class Config:
 				visit_softmax_temperature_fn,
 				known_bounds=None):
 		### Self-Play
-		self.action_space_type0_size=4
-		self.action_space_type1_size=board_size**2
+		self.action_space_type0=list(range(4))
+		self.action_space_type1=list(range(4,4+2*board_size**2))
+		self.type1_p=np.array([0]*4+[9]*board_size**2+[1]*board_size**2,dtype='float32')
+		self.type1_p/=np.sum(self.type1_p)
 		self.num_actors=num_actors
 		self.board_size=board_size
 
@@ -32,7 +33,7 @@ class Config:
 		self.max_moves=max_moves
 		self.num_simulations=num_simulations
 		self.discount=discount
-
+		self.search_threads=search_threads
 		# Root prior exploration noise.
 		self.root_dirichlet_alpha=dirichlet_alpha
 		self.root_exploration_fraction=0.25
@@ -82,10 +83,9 @@ class Config:
 
 def default_config():
 	return Config(
-		action_space_type0_size=4,
-		action_space_type1_size=32,
 		max_moves=1e5,#it can be infinity because any 2048 game is bound to end
 		discount=0.97,
+		search_threads=20,
 		dirichlet_alpha=0.3,
 		num_simulations=100,
 		board_size=4,

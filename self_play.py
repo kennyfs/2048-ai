@@ -1,6 +1,96 @@
 import numpy as np
 import ray
 import asyncio
+import network
+import sys,random
+MAXIMUM_FLOAT_VALUE=float('inf')
+KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
+class MinMaxStats():
+	"""A class that holds the min-max values of the tree."""
+
+	def __init__(self,known_bounds:KnownBounds):
+		self.maximum=known_bounds.max if known_bounds else -MAXIMUM_FLOAT_VALUE
+		self.minimum=known_bounds.min if known_bounds else MAXIMUM_FLOAT_VALUE
+		#any update is accepted
+		
+	def update(self,value:float):
+		self.maximum=max(self.maximum,value)
+		self.minimum=min(self.minimum,value)
+
+	def normalize(self,value:float)->float:
+		if self.maximum>self.minimum:
+			# We normalize only when we have set the maximum and minimum values.
+			return (value-self.minimum)/(self.maximum-self.minimum)
+		return value
+class GameHistory:####
+	"""
+	Store only usefull information of a self-play game.
+	"""
+
+	def __init__(self):
+		self.observation_history = []
+		self.action_history = []
+		self.reward_history = []
+		self.to_play_history = []
+		self.child_visits = []
+		self.root_values = []
+		self.reanalysed_predicted_root_values = None
+		# For PER
+		self.priorities = None
+		self.game_priority = None
+
+	def store_search_statistics(self, root, action_space):
+		# Turn visit count from root into a policy
+		if root is not None:
+			sum_visits = sum(child.visit_count for child in root.children.values())
+			self.child_visits.append(
+				[
+					root.children[a].visit_count / sum_visits
+					if a in root.children
+					else 0
+					for a in action_space
+				]
+			)
+
+			self.root_values.append(root.value())
+		else:
+			self.root_values.append(None)
+
+	def get_stacked_observations(self, index, num_stacked_observations):
+		"""
+		Generate a new observation with the observation at the index position
+		and num_stacked_observations past observations and actions stacked.
+		"""
+		# Convert to positive index
+		index = index % len(self.observation_history)
+
+		stacked_observations = self.observation_history[index].copy()
+		for past_observation_index in reversed(
+			range(index - num_stacked_observations, index)
+		):
+			if 0 <= past_observation_index:
+				previous_observation = np.concatenate(
+					(
+						self.observation_history[past_observation_index],
+						[
+							np.ones_like(stacked_observations[0])
+							* self.action_history[past_observation_index + 1]
+						],
+					)
+				)
+			else:
+				previous_observation = np.concatenate(
+					(
+						np.zeros_like(self.observation_history[index]),
+						[np.zeros_like(stacked_observations[0])],
+					)
+				)
+
+			stacked_observations = np.concatenate(
+				(stacked_observations, previous_observation)
+			)
+
+		return stacked_observations
 class MCTS:
 	"""
 	Core Monte Carlo Tree Search algorithm.
@@ -9,12 +99,18 @@ class MCTS:
 	reach a leaf node.
 	"""
 
-	def __init__(self, config):
+	def __init__(self, config, predictor):
 		self.config = config
+		self.push_queue=manager.push_queue_func
+		self.manager = predictor.manager
+		self.sem=asyncio.Semaphore(config.search_threads)
+		self.now_expanding=set()
+		self.expanded=set()
 	async def run(self,
-			model,
-			observation,
+			predictor,
+			observation, 
 			legal_actions,
+			now_type,
 			add_exploration_noise,
 			override_root_with=None):
 		"""
@@ -27,24 +123,24 @@ class MCTS:
 			root = override_root_with
 			root_predicted_value = None
 		else:
+			#defaulted not to use previously searched nodes and create a new tree
 			root = Node(0)
-			output=await model.initial_inference(observation)
+			output=await predictor.initial_inference(observation)
 			
 			root_predicted_value=output.value
 			reward=output.reward
 			policy_logits=output.policy
 			hidden_state=output.hidden_state
-			if self.config.support:
-				root_predicted_value = models.support_to_scalar(root_predicted_value, self.config.support).item()
-				reward = models.support_to_scalar(reward, self.config.support).item()
-			assert (
-				legal_actions
-			), f"Legal actions should not be an empty array. Got {legal_actions}."
-			assert set(legal_actions).issubset(
-				set(range(self.config.action_space_type0_size))
-			), "Legal actions should be a subset of the action space."
+			assert len(legal_actions)>0, 'Legal actions should not be an empty array.'
+			flag=1
+			for action in legal_actions:
+				if action<0 or action>=4:
+					flag=0
+					break
+			assert flag, f'Legal actions should be a subset of the action space. Got {legal_actions}'
 			root.expand(
 				legal_actions,
+				now_type,
 				reward,
 				policy_logits,
 				hidden_state,
@@ -58,61 +154,91 @@ class MCTS:
 
 		min_max_stats = MinMaxStats()
 
-		max_tree_depth = 0
+		#max_tree_depth = 0
 		for _ in range(self.config.num_simulations):
-			node = root
-			search_path = [node]
-			current_tree_depth = 0
-
-			while node.expanded():
-				current_tree_depth += 1
-				action, node = self.select_child(node, min_max_stats)
-				search_path.append(node)
-
-
-			# Inside the search tree we use the dynamics function to obtain the next hidden
-			# state given an action and the previous hidden state
-			parent = search_path[-2]
-			value, reward, policy_logits, hidden_state = model.recurrent_inference(
-				parent.hidden_state,
-				np.array([action])
-			)
-			if self.config.support:
-				value = models.support_to_scalar(value, self.config.support).item()
-				reward = models.support_to_scalar(reward, self.config.support).item()
-			node.expand(
-				self.config.action_space_type0_size,
-				reward,
-				policy_logits,
-				hidden_state,
-			)
-
-			self.backpropagate(search_path, value, virtual_to_play, min_max_stats)
-
-			max_tree_depth = max(max_tree_depth, current_tree_depth)
-
+			self.manager.add_coroutine_list(self.tree_search())
+		self.manager.run_coroutine_list()
 		extra_info = {
-			"max_tree_depth": max_tree_depth,
-			"root_predicted_value": root_predicted_value,
+			#"max_tree_depth": max_tree_depth,
+			#"root_predicted_value": root_predicted_value,
 		}
 		return root, extra_info
+	async def tree_search(self, node, now_type)->float:
+		###Independent MCTS, run one simulation###
+		self.running_simulation_num += 1
 
-	def select_child(self, node, min_max_stats):
-		"""
-		Select the child with the highest UCB score.
-		"""
-		ucb=[self.ucb_score(node, child, min_max_stats) for action,child in node.children.items()]
-		max_ucb = max(ucb)
-		action = np.random.choice(
-			[
-				action
-				for i,action in enumerate(node.children.keys())
-				if ucb[i]==max_ucb
-			]
+		# reduce parallel search number
+		with await self.sem:
+			value = await self.start_tree_search(node, now_type)
+			self.running_simulation_num -= 1
+
+			return value
+	async def start_tree_search(self, node, now_type)->float:
+		now_expanding = self.now_expanding
+
+		while node in now_expanding:
+			await asyncio.sleep(1e-4)
+		node = root
+		search_path=[node]
+		current_tree_depth = 0
+		#now_type is always the type of action to this node
+		while node.expanded():
+			current_tree_depth += 1
+			action, node = self.select_child(node, now_type, min_max_stats)
+			search_path.append(node)
+			now_type=1 if now_type==0 else 0
+			
+		# Inside the search tree we use the dynamics function to obtain the next hidden
+		# state given an action and the previous hidden state
+		parent=search_path[-2]
+		output=await predictor.recurrent_inference(
+			parent.hidden_state,
+			np.array([action])
 		)
+		if now_type==1:
+			actions=self.config.action_space_type1_size
+			output.policy=self.config.type1_p
+		else:
+			actions=self.config.action_space_type0_size
+		node.expand(
+			actions,
+			now_type,
+			output.reward,
+			output.policy,
+			output.hidden_state,
+		)
+
+		self.backpropagate(search_path, output.value, now_type, min_max_stats)
+
+		max_tree_depth = max(max_tree_depth, current_tree_depth)
+
+		
+
+	def select_child(self, node, now_type, min_max_stats):
+		"""
+		Select the child with the highest UCB score for mcts, not for final play.
+		So type 1 contains all possible positions.
+		"""
+		action=None
+		if now_type==1:#this can be really randomly choosing one, or based on ucb.
+			#randomly
+			p=[child.prior for child in node.children.values()]
+			assert sum(p)==1
+			action=np.random.choice(list(node.children.keys()),p=p)
+		else:
+			ucb=[self.ucb_score(node, child, min_max_stats) for action,child in node.children.items()]
+			max_ucb = max(ucb)
+			action = np.random.choice(
+				[
+					action
+					for i,action in enumerate(node.children.keys())
+					if ucb[i]==max_ucb
+				]
+			)
+		assert action!=None,f'action not decided in MCTS.select_child!, with now_type={now_type}'
 		return action, node.children[action]
 
-	def ucb_score(self, parent, child, min_max_stats):
+	def ucb_score(self, parent, child, min_max_stats):#only for type0
 		"""
 		The score for a node is based on its value, plus an exploration bonus based on the prior.
 		"""
@@ -143,26 +269,13 @@ class MCTS:
 		At the end of a simulation, we propagate the evaluation all the way up the tree
 		to the root.
 		"""
-		if len(self.config.players) == 1:
-			for node in reversed(search_path):
-				node.value_sum += value
-				node.visit_count += 1
-				min_max_stats.update(node.reward + self.config.discount * node.value())
+		for node in reversed(search_path):
+			node.value_sum += value
+			node.visit_count += 1
+			min_max_stats.update(node.reward + self.config.discount * node.value())
 
-				value = node.reward + self.config.discount * value
+			value = node.reward + self.config.discount * value
 
-		elif len(self.config.players) == 2:
-			for node in reversed(search_path):
-				node.value_sum += value if node.to_play == to_play else -value
-				node.visit_count += 1
-				min_max_stats.update(node.reward + self.config.discount * -node.value())
-
-				value = (
-					-node.reward if node.to_play == to_play else node.reward
-				) + self.config.discount * value
-
-		else:
-			raise NotImplementedError("More than two player mode not implemented.")
 		  
 class Node:
 	def __init__(self, prior):
@@ -182,20 +295,24 @@ class Node:
 			return 0
 		return self.value_sum / self.visit_count
 
-	def expand(self, actions, to_play, reward, policy_logits, hidden_state):
+	def expand(self, actions, now_type, reward, policy_logits, hidden_state):
 		"""
 		We expand a node using the value, reward and policy prediction obtained from the
 		neural network.
 		"""
-		assert type(actions) in (int,list)
+		assert type(actions) in (int,list), f'type(actions)=type({actions})={type(actions)}, not int or list'
 		if type(actions)==int:
 			actions=list(range(actions))
 		self.reward = reward
 		self.hidden_state = hidden_state
-
+		#for type 1(adding a tile), policy:{2:9,4:1}, it will choose randomly
+		if now_type==1:
+			for action in actions:
+				self.children[action] = Node(policy_logits[action])
+			return
 		policy_values = tf.nn.softmax(
-			[policy_logits[0][a] for a in actions]
-		).np()
+			[policy_logits[a] for a in actions]
+		).numpy()
 		policy = {a: policy_values[i] for i, a in enumerate(actions)}
 		for action, p in policy.items():
 			self.children[action] = Node(p)
@@ -210,3 +327,235 @@ class Node:
 		frac = exploration_fraction
 		for a, n in zip(actions, noise):
 			self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
+
+class SelfPlay:
+	"""
+	Class which run in a dedicated thread to play games and save them to the replay-buffer.
+	"""
+
+	def __init__(self, initial_checkpoint, Game, config, predictor):
+		self.config = config
+		self.debug = config.debug
+		seed=config.seed
+		if seed==None:
+			seed=random.randrange(sys.maxsize)
+			if self.debug:
+				print(f'seed was set to be {seed}.')
+		self.game = Game(seed)
+
+		# Fix random generator seed
+		np.random.seed(seed)
+		tf.random.set_seed(seed)
+
+		# Initialize the network
+		self.model = network.Network(config)
+		self.model.set_weights(initial_checkpoint["weights"])
+
+	def continuous_self_play(self, shared_storage, replay_buffer, test_mode=False):
+		while shared_storage.get_info("training_step") < self.config.training_steps
+			and 
+			not shared_storage.get_info("terminate"):
+			self.model.set_weights(ray.get(shared_storage.get_info.remote("weights")))
+
+			if test_mode:
+				pass ####
+				# Take the best action (no exploration) in test mode
+				'''
+				game_history = self.play_game(
+					0,
+					self.config.temperature_threshold,
+					False,
+				)
+
+				# Save to the shared storage
+				shared_storage.set_info.remote(
+					{
+						"episode_length": len(game_history.action_history) - 1,
+						"total_reward": sum(game_history.reward_history),
+						"mean_value": np.mean(
+							[value for value in game_history.root_values if value]
+						),
+					}
+				)
+				if 1 < len(self.config.players):
+					shared_storage.set_info.remote(
+						{
+							"muzero_reward": sum(
+								reward
+								for i, reward in enumerate(game_history.reward_history)
+								if game_history.to_play_history[i - 1]
+								== self.config.muzero_player
+							),
+							"opponent_reward": sum(
+								reward
+								for i, reward in enumerate(game_history.reward_history)
+								if game_history.to_play_history[i - 1]
+								!= self.config.muzero_player
+							),
+						}
+					)
+				'''
+			else:
+				game_history = self.play_game(
+					self.config.visit_softmax_temperature_fn(
+						trained_steps=shared_storage.get_info
+						)
+					),
+					False,
+				)
+
+				replay_buffer.save_game(game_history, shared_storage)
+				
+
+			# Managing the self-play / training ratio
+			if not test_mode and self.config.self_play_delay:
+				time.sleep(self.config.self_play_delay)
+			if not test_mode and self.config.ratio:
+				while (
+					shared_storage.get_info("training_step") / max(
+						1, shared_storage.get_info("num_played_steps")
+					) < self.config.ratio####
+					and 
+					shared_storage.get_info("training_step")
+					< self.config.training_steps
+					and 
+					not shared_storage.get_info("terminate")
+				):
+					time.sleep(0.5)
+
+		self.close_game()
+
+	def play_game(self, temperature, render):
+		"""
+		Play one game with actions based on the Monte Carlo tree search at each moves.
+		"""
+		game_history = GameHistory()
+		self.game.reset()
+		observation = self.game.get_features()
+		#initial position
+		game_history.action_history.append(None)
+		game_history.observation_history.append(observation)
+		game_history.reward_history.append(None)
+		game_history.type_history.append(self.game.type())
+
+		done = False
+
+		if render:
+			self.game.render()
+
+		while not done and len(game_history.action_history) <= self.config.max_moves:
+			assert (
+				len(np.array(observation).shape) == 3
+			), f"Observation should be 3 dimensionnal instead of {len(np.array(observation).shape)} dimensionnal. Got observation of shape: {np.array(observation).shape}"
+			assert (
+				np.array(observation).shape == self.config.observation_shape
+			), f"Observation should match the observation_shape defined in MuZeroConfig. Expected {self.config.observation_shape} but got {np.array(observation).shape}."
+			stacked_observations = game_history.get_stacked_observations(
+				-1,
+				self.config.stacked_observations,
+			)
+
+			# Choose the action
+			if opponent == "self" or muzero_player == self.game.to_play():
+				root, mcts_info = MCTS(self.config).run(
+					self.model,
+					stacked_observations,
+					self.game.legal_actions(),
+					self.game.to_play(),
+					True,
+				)
+				action = self.select_action(
+					root,
+					temperature
+					if not temperature_threshold
+					or len(game_history.action_history) < temperature_threshold
+					else 0,
+				)
+
+				if render:
+					print(f'Tree depth: {mcts_info["max_tree_depth"]}')
+					print(
+						f"Root value for player {self.game.to_play()}: {root.value():.2f}"
+					)
+			else:
+				action, root = self.select_opponent_action(
+					opponent, stacked_observations
+				)
+
+			observation, reward, done = self.game.step(action)
+
+			if render:
+				print(f"Played action: {self.game.action_to_string(action)}")
+				self.game.render()
+
+			game_history.store_search_statistics(root, self.config.action_space)
+
+			# Next batch
+			game_history.action_history.append(action)
+			game_history.observation_history.append(observation)
+			game_history.reward_history.append(reward)
+			game_history.to_play_history.append(self.game.to_play())
+
+		return game_history
+
+	def close_game(self):
+		self.game.close()
+
+	def select_opponent_action(self, opponent, stacked_observations):
+		"""
+		Select opponent action for evaluating MuZero level.
+		"""
+		if opponent == "human":
+			root, mcts_info = MCTS(self.config).run(
+				self.model,
+				stacked_observations,
+				self.game.legal_actions(),
+				self.game.to_play(),
+				True,
+			)
+			print(f'Tree depth: {mcts_info["max_tree_depth"]}')
+			print(f"Root value for player {self.game.to_play()}: {root.value():.2f}")
+			print(
+				f"Player {self.game.to_play()} turn. MuZero suggests {self.game.action_to_string(self.select_action(root, 0))}"
+			)
+			return self.game.human_to_action(), root
+		elif opponent == "expert":
+			return self.game.expert_agent(), None
+		elif opponent == "random":
+			assert (
+				self.game.legal_actions()
+			), f"Legal actions should not be an empty array. Got {self.game.legal_actions()}."
+			assert set(self.game.legal_actions()).issubset(
+				set(self.config.action_space)
+			), "Legal actions should be a subset of the action space."
+
+			return np.random.choice(self.game.legal_actions()), None
+		else:
+			raise NotImplementedError(
+				'Wrong argument: "opponent" argument should be "self", "human", "expert" or "random"'
+			)
+
+	@staticmethod
+	def select_action(node, temperature):
+		"""
+		Select action according to the visit count distribution and the temperature.
+		The temperature is changed dynamically with the visit_softmax_temperature function
+		in the config.
+		"""
+		visit_counts = np.array(
+			[child.visit_count for child in node.children.values()], dtype="int32"
+		)
+		actions = [action for action in node.children.keys()]
+		if temperature == 0:
+			action = actions[np.argmax(visit_counts)]
+		elif temperature == float("inf"):
+			action = np.random.choice(actions)
+		else:
+			# See paper appendix Data Generation
+			visit_count_distribution = visit_counts ** (1 / temperature)
+			visit_count_distribution = visit_count_distribution / sum(
+				visit_count_distribution
+			)
+			action = np.random.choice(actions, p=visit_count_distribution)
+
+		return action

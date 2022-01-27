@@ -3,7 +3,7 @@ from copy import copy,deepcopy
 #from network import nn
 import numpy as np
 from time import time,sleep
-from environment import Environment,Action
+from environment import Environment
 from config import Config,Game,default_config
 from network import *
 import collections
@@ -15,7 +15,7 @@ reset="\x1b[0m"
 assumption:
 total training steps=1e5 or less
 '''
-	  
+
 MAXIMUM_FLOAT_VALUE=float('inf')
 KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
 class MinMaxStats():
@@ -35,30 +35,30 @@ class MinMaxStats():
 			# We normalize only when we have set the maximum and minimum values.
 			return (value-self.minimum)/(self.maximum-self.minimum)
 		return value
-
-class ActionHistory():
+#### This need to be edit to match action_space rather than action_space_size!!!!
+class ActionHistory:
 	"""Simple history container used inside the search.
 
 	Only used to keep track of the actions executed.
 	"""
 
-	def __init__(self, history:'List[Action]', action_space_size: int):
+	def __init__(self, history:'List[Action]', action_space:'List[Action]'):
 		self.history = list(history)
 		self.action_space_size = action_space_size
 
 	def clone(self):
 		return ActionHistory(self.history, self.action_space_size)
 
-	def add_action(self, action: Action):
+	def add_action(self, action):
 		self.history.append(action)
 
-	def last_action(self) -> Action:
+	def last_action(self) -> 'Action':
 		return self.history[-1]
 
 	def action_space(self) -> 'List[Action]':
-		return [Action(i) for i in range(self.action_space_size)]
+		return [i for i in range(self.action_space_size)]
 
-class Node():
+class Node:
 	def __init__(self,p:float):
 		self.visit_count=0
 		self.p=p
@@ -128,7 +128,7 @@ def player():
 	b.add()
 	l=0
 	while not b.finish():
-		b.dump()
+		b.render()
 		print('move count:',l)
 		l+=1
 		done=False
@@ -140,9 +140,9 @@ def player():
 				except:valid=False
 				if a>3 or a<0:
 					valid=False
-			if b.valid(Action(a)):
-				b.step(Action(a))
+			if b.valid(a):
+				b.step(a)
 				b.add()
 				done=True
-	b.dump()
+	b.render()
 player()
