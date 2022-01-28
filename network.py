@@ -1,3 +1,4 @@
+import asyncio
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -7,7 +8,7 @@ import collections
 from abc import ABC,abstractmethod
 from copy import deepcopy as dc
 
-def scale_hidden_state(to_scale_hidden_state->np.array,hidden_state_as_matrix=False):
+def scale_hidden_state(to_scale_hidden_state:np.array, hidden_state_as_matrix=False):
 	shape=to_scale_hidden_state.shape
 	if hidden_state_as_matrix:
 		to_scale_hidden_state=tf.reshape(to_scale_hidden_state,(shape[0],-1))#flatten from [batch_size,hidden_state_size_x,hidden_state_size_y] to [batch_size,hidden_state_size_x*hidden_state_size_y]
@@ -165,7 +166,7 @@ class FullyConnectedNetwork():
 		hidden_state=scale_hidden_state(hidden_state)
 		return hidden_state,reward
 	def prediction(self,hidden_state):
-		policy,value=self.prediction_model(hidden_size)
+		policy,value=self.prediction_model(hidden_state)
 		return policy,value
 QueueItem=collections.namedtuple("QueueItem",['inputs','future'])
 class Manager:
@@ -183,14 +184,14 @@ class Manager:
 		self.prediction_queue=asyncio.queues.Queue(max_threads)
 		
 		self.coroutine_list=[self.prediction_worker()]
-		async def push_queue_func(features,network->str):#network means which to use. If passing string consumes too much time, pass int instead.
+		async def push_queue_func(features,network:str):#network means which to use. If passing string consumes too much time, pass int instead.
 			future=self.loop.create_future()
-			item=QueueItem(inputs,future)
+			item=QueueItem(features,future)
 			if network=='representation':
 				await self.representation_queue.put(item)
-			else if network=='dynamics':
+			elif network=='dynamics':
 				await self.dynamics_queue.put(item)
-			else if network=='prediction':
+			elif network=='prediction':
 				await self.prediction_queue.put(item)
 			else:
 				raise NotImplementedError
@@ -222,9 +223,9 @@ class Manager:
 			for name,weight in weights.items():
 				if name=='representation':
 					self.representation.set_weights(weight)
-				else if name=='dynamics':
+				elif name=='dynamics':
 					self.dynamics.set_weights(weight)
-				else if name=='prediction':
+				elif name=='prediction':
 					self.prediction.set_weights(weight)
 				else:
 					raise NotImplementedError
@@ -257,20 +258,20 @@ class Manager:
 					results = func(inputs)
 					print('inference:',time()-start)
 				if name=='representation':
-					hidden_state=scale_hidden_state(result)#scale hidden state
+					hidden_state=scale_hidden_state(results)#scale hidden state
 					assert hidden_state.shape[0]==len(item_list), 'sizes of hidden_state('+hidden_state.shape+') and item_list('+len(item_list)+') don\'t match, this should never happen.'
 					for i in range(len(item_list)):
 						item_list[i].future.set_result(hidden_state[i])
-				else if name=='dynamics':
-					hidden_state,reward=result
+				elif name=='dynamics':
+					hidden_state,reward=results
 					hidden_state=scale_hidden_state(hidden_state)#scale hidden state
 					assert hidden_state.shape[0]==len(item_list) and reward.shape[0]==len(item_list), 'sizes of hidden_state('+hidden_state.shape+'), reward('+reward.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
 					if self.support:
 						reward=support_to_scalar(reward,self.support)
 					for i in range(len(item_list)):
 						item_list[i].future.set_result((hidden_state[i],reward[i]))
-				else if name=='prediction':
-					policy,value=result
+				elif name=='prediction':
+					policy,value=results
 					assert policy.shape[0]==len(item_list) and value.shape[0]==len(item_list), 'sizes of policy('+policy.shape+'), value('+value.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
 					if self.support:
 						value=support_to_scalar(value,self.support)

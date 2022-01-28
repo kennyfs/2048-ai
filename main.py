@@ -42,9 +42,12 @@ class ActionHistory:
 	Only used to keep track of the actions executed.
 	"""
 
-	def __init__(self, history:'List[Action]', action_space:'List[Action]'):
+	def __init__(self, history, action_space):
+		'''
+		history and action_space are both list[Action(int)]
+		'''
 		self.history = list(history)
-		self.action_space_size = action_space_size
+		self.action_space_size = action_space
 
 	def clone(self):
 		return ActionHistory(self.history, self.action_space_size)
@@ -52,10 +55,10 @@ class ActionHistory:
 	def add_action(self, action):
 		self.history.append(action)
 
-	def last_action(self) -> 'Action':
+	def last_action(self):#return Action
 		return self.history[-1]
 
-	def action_space(self) -> 'List[Action]':
+	def action_space(self):#return list[Action]
 		return [i for i in range(self.action_space_size)]
 
 class Node:
@@ -75,7 +78,7 @@ class Node:
 			return 0
 		return self.value_sum/self.visit_count
 
-class ReplayBuffer():### Starting from here next time
+class ReplayBuffer():#### maybe should be separate to another file
 	def __init__(self, config: Config):
 		self.window_size = config.window_size
 		self.batch_size = config.batch_size
@@ -102,8 +105,8 @@ class ReplayBuffer():### Starting from here next time
 
 	def sample_position(self, game) -> int:
 		# Sample position from game either uniformly or according to some priority.
-		return np.random.choice(len(game_history.root_values))
-		
+		#### return np.random.choice(len(game_history.root_values))
+		pass
 
 class SharedStorage():
 

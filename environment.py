@@ -1,3 +1,4 @@
+from time import sleep
 import numpy as np
 from random import randint
 from copy import deepcopy
@@ -237,9 +238,10 @@ class Game:
 				targets.append((0, last_reward, []))
 		return targets
 		
-	def action_history(self):
+	####
+	'''def action_history(self):
 		return ActionHistory(self.history, self.action_space_type0)
-		
+		pass'''
 	def replay(self):
 		tmp=Environment([[0]*4 for i in range(4)],addwhenplay=False)
 		for i in self.history:
@@ -257,3 +259,8 @@ class Game:
 		with open(f,'r') as F:
 			self.data=eval(F.readline())
 			self.moves=eval(F.readline())
+	def Action_to_string(self,action:int)->str:
+		if 0<=action and action<=3:
+			return (['Up','Down','Left','Right'])[action]
+		action-=4
+		if 

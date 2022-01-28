@@ -1,8 +1,12 @@
+import collections
+import math
+import time
 import numpy as np
 import ray
 import asyncio
 import network
 import sys,random
+import tensorflow as tf
 MAXIMUM_FLOAT_VALUE=float('inf')
 KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
 class MinMaxStats():
@@ -32,6 +36,7 @@ class GameHistory:####
 		self.action_history = []
 		self.reward_history = []
 		self.to_play_history = []
+		self.type_history = []
 		self.child_visits = []
 		self.root_values = []
 		self.reanalysed_predicted_root_values = None
@@ -101,7 +106,7 @@ class MCTS:
 
 	def __init__(self, config, predictor):
 		self.config = config
-		self.push_queue=manager.push_queue_func
+		self.push_queue = predictor.manager.push_queue_func
 		self.manager = predictor.manager
 		self.sem=asyncio.Semaphore(config.search_threads)
 		self.now_expanding=set()
@@ -156,29 +161,28 @@ class MCTS:
 
 		#max_tree_depth = 0
 		for _ in range(self.config.num_simulations):
-			self.manager.add_coroutine_list(self.tree_search())
+			self.manager.add_coroutine_list(self.tree_search(root, now_type, min_max_stats))
 		self.manager.run_coroutine_list()
 		extra_info = {
 			#"max_tree_depth": max_tree_depth,
 			#"root_predicted_value": root_predicted_value,
 		}
 		return root, extra_info
-	async def tree_search(self, node, now_type)->float:
+	async def tree_search(self, node, now_type, min_max_stats)->float:
 		###Independent MCTS, run one simulation###
 		self.running_simulation_num += 1
 
 		# reduce parallel search number
 		with await self.sem:
-			value = await self.start_tree_search(node, now_type)
+			value = await self.start_tree_search(node, now_type, min_max_stats)
 			self.running_simulation_num -= 1
 
 			return value
-	async def start_tree_search(self, node, now_type)->float:
+	async def start_tree_search(self, node, now_type, min_max_stats)->float:
 		now_expanding = self.now_expanding
 
 		while node in now_expanding:
 			await asyncio.sleep(1e-4)
-		node = root
 		search_path=[node]
 		current_tree_depth = 0
 		#now_type is always the type of action to this node
@@ -191,7 +195,7 @@ class MCTS:
 		# Inside the search tree we use the dynamics function to obtain the next hidden
 		# state given an action and the previous hidden state
 		parent=search_path[-2]
-		output=await predictor.recurrent_inference(
+		output=await self.predictor.recurrent_inference(
 			parent.hidden_state,
 			np.array([action])
 		)
@@ -210,7 +214,7 @@ class MCTS:
 
 		self.backpropagate(search_path, output.value, now_type, min_max_stats)
 
-		max_tree_depth = max(max_tree_depth, current_tree_depth)
+		#max_tree_depth = max(max_tree_depth, current_tree_depth)
 
 		
 
@@ -333,7 +337,7 @@ class SelfPlay:
 	Class which run in a dedicated thread to play games and save them to the replay-buffer.
 	"""
 
-	def __init__(self, initial_checkpoint, Game, config, predictor):
+	def __init__(self, initial_checkpoint, Game, config):
 		self.config = config
 		self.debug = config.debug
 		seed=config.seed
@@ -350,11 +354,11 @@ class SelfPlay:
 		# Initialize the network
 		self.model = network.Network(config)
 		self.model.set_weights(initial_checkpoint["weights"])
-
+		#### should initialize manager, predictor here
 	def continuous_self_play(self, shared_storage, replay_buffer, test_mode=False):
-		while shared_storage.get_info("training_step") < self.config.training_steps
-			and 
-			not shared_storage.get_info("terminate"):
+		while (shared_storage.get_info("training_step") < self.config.training_steps
+			)and(
+			not shared_storage.get_info("terminate")):
 			self.model.set_weights(ray.get(shared_storage.get_info.remote("weights")))
 
 			if test_mode:
@@ -399,7 +403,6 @@ class SelfPlay:
 				game_history = self.play_game(
 					self.config.visit_softmax_temperature_fn(
 						trained_steps=shared_storage.get_info
-						)
 					),
 					False,
 				)
@@ -456,33 +459,25 @@ class SelfPlay:
 			)
 
 			# Choose the action
-			if opponent == "self" or muzero_player == self.game.to_play():
-				root, mcts_info = MCTS(self.config).run(
-					self.model,
-					stacked_observations,
-					self.game.legal_actions(),
-					self.game.to_play(),
-					True,
-				)
-				action = self.select_action(
-					root,
-					temperature
-					if not temperature_threshold
-					or len(game_history.action_history) < temperature_threshold
-					else 0,
-				)
+			
+			root, mcts_info = MCTS(self.config).run(
+				self.model,
+				stacked_observations,
+				self.game.legal_actions(),
+				self.game.to_play(),
+				True,
+			)
+			action = self.select_action(
+				root,
+				temperature
+			)
 
-				if render:
-					print(f'Tree depth: {mcts_info["max_tree_depth"]}')
-					print(
-						f"Root value for player {self.game.to_play()}: {root.value():.2f}"
-					)
-			else:
-				action, root = self.select_opponent_action(
-					opponent, stacked_observations
+			if render:
+				print(f'Tree depth: {mcts_info["max_tree_depth"]}')
+				print(
+					f"Root value for player {self.game.to_play()}: {root.value():.2f}"
 				)
-
-			observation, reward, done = self.game.step(action)
+			reward = self.game.step(action)
 
 			if render:
 				print(f"Played action: {self.game.action_to_string(action)}")
