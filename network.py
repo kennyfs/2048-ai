@@ -1,15 +1,20 @@
 import asyncio
+import collections
+from abc import ABC, abstractmethod
+from copy import deepcopy as dc
+from time import time
+
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import Model,layers,optimizers,losses
-from time import time,sleep
-import collections
-from abc import ABC,abstractmethod
-from copy import deepcopy as dc
 
-def scale_hidden_state(to_scale_hidden_state:np.array, hidden_state_as_matrix=False):
+
+def scale_hidden_state(to_scale_hidden_state:np.array):
+	'''
+	input should contain batch size, but it can whether be a matrix or not.
+	shape:(batchsize, hidden_state_size) or (batchsize, hidden_state_size_x, hidden_state_size_y)
+	'''
 	shape=to_scale_hidden_state.shape
+	hidden_state_as_matrix=len(shape)==3
 	if hidden_state_as_matrix:
 		to_scale_hidden_state=tf.reshape(to_scale_hidden_state,(shape[0],-1))#flatten from [batch_size,hidden_state_size_x,hidden_state_size_y] to [batch_size,hidden_state_size_x*hidden_state_size_y]
 	min_encoded_state = tf.math.reduce_min(to_scale_hidden_state,axis=1,keepdims=True)
@@ -18,7 +23,7 @@ def scale_hidden_state(to_scale_hidden_state:np.array, hidden_state_as_matrix=Fa
 	scale_encoded_state = tf.where(scale_encoded_state<1e-5,scale_encoded_state+1e-5,scale_encoded_state)#avoid divided by 0 or too small value
 	encoded_state_normalized = (to_scale_hidden_state - min_encoded_state) / scale_encoded_state
 	if hidden_state_as_matrix:
-		encoded_state_normalized.reshape(shape)#and reshape to original shape
+		encoded_state_normalized=tf.reshape(encoded_state_normalized,shape)#and reshape to original shape
 	return encoded_state_normalized
 
 def support_to_scalar(logits, support_size):# logits is in shape (batch_size,full_support_size)
@@ -51,6 +56,10 @@ NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state',
 #action:			one-hotted, in shape of (batch_size,4+2*boardsize**2)
 #policy:			in shape of (batch_size,4(UDLR))
 #value and reward:	in shape of (batch_size,full_support_size) if using support, else (batch_size,1) #about "support", described at config.py:53
+def my_expand_dims(inputs,expected_shape_length):
+	while len(inputs.shape)<expected_shape_length:
+		inputs=np.expand_dims(inputs,axis=0)
+	return inputs
 class AbstractNetwork(ABC):
 	def __init__(self):
 		super().__init__()
@@ -62,12 +71,12 @@ class AbstractNetwork(ABC):
 		pass
 		
 	@abstractmethod
-	def dynamics(self,hidden_state,action):
+	def dynamics(self, hidden_state, action):
 		#output:hidden_state,reward
 		pass
 		
 	@abstractmethod
-	def prediction(self,hidden_state):
+	def prediction(self, hidden_state):
 		#output:policy,value
 		pass
 		
@@ -77,7 +86,7 @@ class Network:
 			return FullyConnectedNetwork(config)
 		else:
 			raise NotImplementedError
-class FullyConnectedNetwork():
+class FullyConnectedNetwork(AbstractNetwork):
 	def __init__(self,config):
 		super().__init__()
 		#config
@@ -107,6 +116,15 @@ class FullyConnectedNetwork():
 			config.prediction_value_head_size,
 			4,#policy
 			self.full_support_size)#value
+	def representation(self, observation):
+		observation=my_expand_dims(observation, 4)
+		return self.representation_model(observation)
+	def dynamics(self, concatenated_inputs):
+		concatenated_inputs=my_expand_dims(concatenated_inputs, 2)
+		return self.dynamics_model(concatenated_inputs)
+	def prediction(self, hidden_state):
+		hidden_state=my_expand_dims(hidden_state, 2)
+		return self.prediction_model(hidden_state)
 	class one_output_model(tf.keras.Model):
 		def __init__(self,input_size,sizes,output_size):
 			super().__init__()
@@ -160,7 +178,7 @@ class FullyConnectedNetwork():
 			#return tf.concat((first,second),axis=1)
 			
 	def representation(self,observation):
-		return scale_hidden_state(self.representation_model(observation),False)
+		return scale_hidden_state(self.representation_model(observation))
 	def dynamics(self,hidden_state,action):
 		hidden_state,reward=self.dynamics_model(hidden_state,action)
 		hidden_state=scale_hidden_state(hidden_state)
@@ -170,18 +188,24 @@ class FullyConnectedNetwork():
 		return policy,value
 QueueItem=collections.namedtuple("QueueItem",['inputs','future'])
 class Manager:
-	def __init__(self,config,representation_model,dynamics_model,prediction_model,max_threads=3000):
+	'''
+	Queuing requests of network prediction, and run them simultaneously to improve efficiency
+	
+	input to each network for a single prediction should be in [*expected_shape], rather than [batch_size(1),*expected_shape]
+		process in self.prediction_worker
+		and observation can be flattened or not
+	'''
+	def __init__(self, config, model:AbstractNetwork):
 		self.support=config.support
 		
 		self.loop=asyncio.get_event_loop()
 		#callable model
-		self.representation=representation_model
-		self.dynamics=dynamics_model
-		self.prediction=prediction_model
-		
-		self.representation_queue=asyncio.queues.Queue(max_threads)
-		self.dynamics_queue=asyncio.queues.Queue(max_threads)
-		self.prediction_queue=asyncio.queues.Queue(max_threads)
+		self.representation=model.representation
+		self.dynamics=model.dynamics
+		self.prediction=model.prediction
+		self.representation_queue=asyncio.queues.Queue(config.model_max_threads)
+		self.dynamics_queue=asyncio.queues.Queue(config.model_max_threads)
+		self.prediction_queue=asyncio.queues.Queue(config.model_max_threads)
 		
 		self.coroutine_list=[self.prediction_worker()]
 		async def push_queue_func(features,network:str):#network means which to use. If passing string consumes too much time, pass int instead.
@@ -251,8 +275,8 @@ class Manager:
 				if queue.empty():
 					continue
 				item_list = [queue.get_nowait() for _ in range(queue.qsize())]  # type: list[QueueItem]
-				inputs=np.concatenate([np.expand_dims(item.inputs,axis=0) for item in item_list])
-				print('nn',len(item_list))
+				inputs=np.concatenate([np.expand_dims(item.inputs,axis=0) for item in item_list], axis=0)
+				#print('nn',len(item_list))
 				with tf.device('/device:GPU:0'):
 					start=time()
 					results = func(inputs)
@@ -288,18 +312,26 @@ class Predictor:
 		return future.result()
 		
 	async def initial_inference(self,observation)->NetworkOutput:
+		'''
+		input shape:
+			observation: whether flattened or not and without batchsize
+			it will be flattened in tf.keras.layers.Flatten
+		'''
 		hidden_state=scale_hidden_state(await self.get_outputs(observation,'representation'))#scaled
 		policy,value=await self.get_outputs(hidden_state,'prediction')
 		return NetworkOutput(reward=0,hidden_state=hidden_state,value=value,policy=policy)
 
-	async def recurrent_inference(self,hidden_state,action)->NetworkOutput:
-		#temporarily only for fully connected network.
-		#input shape:
-		#	hidden_state:(hidden_state_size(32)) or (hidden_state_size_x,hidden_state_size_y)
-		#	action:one-hotted, (4+2*boardsize**2)
-		hidden_state=np.expand_dims(hidden_state,axis=0)
-		action=np.expand_dims(action,axis=0)
-		inputs=np.concatenate((hidden_state,action),axis=1)
+	async def recurrent_inference(self,hidden_state:np.array,action:np.array)->NetworkOutput:
+		'''
+		temporarily only for fully connected network.
+		input shape:
+			all be without batchsize
+			hidden_state:(hidden_state_size(32)) or (hidden_state_size_x,hidden_state_size_y)
+			action:one-hotted, (4+2*boardsize**2)
+		'''
+		if len(hidden_state.shape)==2:
+			hidden_state.flatten()
+		inputs=np.concatenate((hidden_state,action),axis=0)
 		new_hidden_state,reward=await self.get_outputs(inputs,'dynamics')
 		new_hidden_state=scale_hidden_state(new_hidden_state)#scaled
 		

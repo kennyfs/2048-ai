@@ -1,8 +1,11 @@
-from time import sleep
-import numpy as np
-from random import randint
+import random
+import sys
 from copy import deepcopy
-import sys,random
+from random import randint
+from time import sleep
+
+import numpy as np
+
 bg   ="\x1b[48;5;"
 word ="\x1b[38;5;"
 end  ="m"
@@ -13,7 +16,7 @@ reset="\x1b[0m"
 	#starting from 4:put a tile, [4,4+self.board_size**2) for putting a 2, [4+self.board_size**2,4+2*self.board_size**2) for putting a 4
 	#(treat putting a tile as an action)
 class Environment:
-	def __init__(self,config,board=None,score=None):
+	def __init__(self,config,board=None,now_type=0,score=None):
 		self.config=config
 		self.board_size=config.board_size
 		if board:#if it's not None
@@ -24,7 +27,18 @@ class Environment:
 			self.score=score
 		else:
 			self.score=0
+		self.now_type=now_type#default is type 0, move
+		#only changed in self.step, directly doing self.add should not change it.
+		self.debug=config.debug
+		seed=config.seed
+		if seed==None:
+			seed=random.randrange(sys.maxsize)
+			if self.debug:
+				print(f'seed was set to be {seed}.')
 	def reset(self):
+		'''
+		clear but not adding 2 tiles, as self_play should know where the initial tiles are
+		'''
 		self.grid=[[0]*self.board_size for _ in range(self.board_size)]
 		self.score=0
 	def movealine(self,line,reverse):#move from self.board_size-1 to 0
@@ -52,8 +66,14 @@ class Environment:
 		if reverse:
 			line=line[::-1]#reverse
 		return line
-	def step(self,action):#up down left right
+	def step(self,action)->int:#up down left right
+		'''
+		input: action
+		output: instant reward
+		'''
 		beforescore=self.score
+		assert (0<=action<4 and self.now_type==0) or (action>=4 and self.now_type==1), f'get action {action}, but now_type is {self.now_type}.'
+		self.change_type()
 		if action==0:
 			for i in range(self.board_size):
 				res=self.movealine([self.grid[j][i] for j in range(self.board_size)],False)
@@ -74,22 +94,11 @@ class Environment:
 				res=self.movealine([self.grid[i][j] for j in range(self.board_size)],True)
 				for j in range(self.board_size):
 					self.grid[i][j]=res[j]
-		tmp=action
-		if 0<=tmp and tmp<=3:
+		if self.action_to_type(action)==0:
 			return self.score-beforescore
-			
-		tmp-=4
-		if 0<=tmp and tmp<self.board_size**2:
-			assert self.grid[tmp//self.board_size][tmp%self.board_size]==0
-			self.grid[tmp//self.board_size][tmp%self.board_size]=1
-			return 0
-			
-		tmp-=self.board_size**2
-		if 0<=tmp and tmp<self.board_size**2:
-			assert self.grid[tmp//self.board_size][tmp%self.board_size]==0
-			self.grid[tmp//self.board_size][tmp%self.board_size]=2
-			return 0
-		raise BaseException('action('+str(action)+') out of range (in Environment.step)')
+		x,y,num=self.add_action_to_pos(action)
+		self.grid[x][y]=num
+		return 0
 	def render(self):
 		for i in self.grid:
 			for j in i:
@@ -119,13 +128,14 @@ class Environment:
 	def add(self)->int:#Action
 		blank=self.get_blanks()
 		if len(blank)==0:
-			raise BaseException('no blank in grid (in Environment.add)')
+			self.render()
+			raise BaseException('no blank in grid')
 		x,y=blank[randint(0,len(blank)-1)]
-		v=2 if randint(1,10)==1 else 1#10% to be a 4(2)
-		self.grid[x][y]=v
-		return 4+(v-1)*self.board_size**2+x*self.board_size+y
+		num=2 if randint(1,10)==1 else 1#10% to be a 4(2)
+		self.grid[x][y]=num
+		return self.add_pos_to_action(x,y,num)
 	def valid(self,action)->bool:
-		if 0<=action and action<=3:#this needs to be faster
+		if 0<=action and action<=3:#### this needs optimizing
 			tmp=Environment(self.config,board=deepcopy(self.grid))
 			a=deepcopy(tmp.grid)
 			tmp.step(action)
@@ -141,126 +151,40 @@ class Environment:
 			return self.grid[x][y]==0
 		raise BaseException('action('+str(action)+') out of range (in Environment.valid)')
 	def get_features(self)->np.array:#given grid, return features for Network input
-		grid=np.array(grid)
+		grid=np.array(self.grid)
+		result=np.array([])
+		for i in range(1,self.board_size**2+1):#board_size**2 is max possible tile
+			result=np.concatenate((result,np.where(grid==i,1.0,0.0)),axis=0)
+		return result
+		'''
+		alternative:
 		result=[]
 		for i in range(1,self.board_size**2+1):
-			result.append(result,np.where(grid==i,1.0,0.0))
-		return result
-class Game:
-	# In any game, the first two actions are adding tile, then each move is followed by adding tile
-	def __init__(self,config):
-		self.environment=Environment(config)  # Game specific environment.
-		self.history=[]#List[Action]
-		self.type=[]#0:move,1:adding tile # will also stored in Node
-		self.child_visits=[]
-		self.root_values=[]
-		self.action_space_type0=config.action_space_type0
-		self.action_space_type1=config.action_space_type1
-		self.discount=config.discount
-		self.debug=config.debug
-		seed=config.seed
-		if seed==None:
-			seed=random.randrange(sys.maxsize)
-			if self.debug:
-				print(f'seed was set to be {seed}.')
-		random.seed(seed)
-		
-	def terminal(self)->bool:
-		# if the game ends
-		return self.environment.finish()
-		
-	def legal_actions(self):#List[Action]
-		# list of legal actions, only care about move(0~3)
-		return self.environment.legal_actions()
-		
-	def apply(self,action):
-		reward = self.environment.step(action)
-		self.rewards.append(reward)
-		self.history.append(action)
-		self.type.append(1 if 0<=action.type and action.type<=3 else 0)
-		
-	def store_search_statistics(self, root):
-		#only store type 0(move)
-		#root.children is Dict[Node] whose keys are actions
-		sum_visits = sum(child.visit_count for child in root.children.values())
-		self.child_visits.append([
-				root.children[a].visit_count / sum_visits if a in root.children else 0
-				for a in self.action_space_type0
-		])
-		self.root_values.append(root.value())
-		#adding tile
-		self.child_visits.append(None)
-		self.root_values.append(None)
-		
-	def make_image(self, state_index: int):#-1 means the last
-		# Game specific feature planes.
-		# Go through history
-		tmpenv=Environment()
-		if state_index==-1:
-			for action in self.history:
-				tmpenv.step(action)
-		elif 0<=state_index and state_index<=len(self.history):
-			# do history[:state_index]
-			for action in self.history[:state_index]:
-				tmpenv.step(action)
-		else:
-			raise BaseException('state_index('+str(state_index)+') is out of range('+str(len(self.history))+') (in Game.make_image)')
-		return tmpenv.get_features()
-
-	def make_target(self, state_index: int, num_unroll_steps: int, td_steps: int):#return type List[Tuple(value_target,reward_target,policy_target) policy might not have a sum of 1
-		# The value target is the discounted root value of the search tree N steps
-		# into the future, plus the discounted sum of all rewards until then.
-		targets = []
-		for current_index in range(state_index, state_index + num_unroll_steps + 1):
-			bootstrap_index = current_index + td_steps
-			if bootstrap_index>len(self.root_values)-1:
-				break
-			if self.type[bootstrap_index]==1:
-				continue#only makes target for type0(move)
-			value = self.root_values[bootstrap_index] * self.discount**td_steps
-			dis=1
-			for reward in self.rewards[current_index:bootstrap_index]:
-				value += reward * dis	# pytype: disable=unsupported-operands
-				dis*=self.discount
-
-			# For simplicity the network always predicts the most recently received
-			# reward, even for the initial representation network where we already
-			# know this reward.
-			if current_index > 0 and current_index <= len(self.rewards):
-				last_reward = self.rewards[current_index - 1]
-			else:
-				last_reward = 0
-
-			if current_index < len(self.root_values):
-				targets.append((value, last_reward, self.child_visits[current_index]))
-			else:
-				# States past the end of games are treated as absorbing states.
-				targets.append((0, last_reward, []))
-		return targets
-		
-	####
-	'''def action_history(self):
-		return ActionHistory(self.history, self.action_space_type0)
-		pass'''
-	def replay(self):
-		tmp=Environment([[0]*4 for i in range(4)],addwhenplay=False)
-		for i in self.history:
-			sleep(0.8)
-			tmp.step(i)
-			tmp.render()
-			
-	def write(self,f):
-		with open(f,'w') as F:
-			F.write(str(self.data))
-			F.write('\n')
-			F.write(str(self.moves))
-			
-	def read(self,f):#clear origin data, moves
-		with open(f,'r') as F:
-			self.data=eval(F.readline())
-			self.moves=eval(F.readline())
+			result.append(np.where(grid==i,1.0,0.0))
+		return np.array(result)
+		'''
+	def change_type(self):
+		self.now_type=1 if self.now_type==2 else 2
+	def add_action_to_pos(self,Action:int):
+		'''
+		return type:
+			x,y,num(1 or 2)
+		'''
+		assert 4<=Action and Action<4+2*self.board_size**2
+		Action-=4
+		num=Action//(self.board_size**2)
+		Action%=self.board_size**2
+		return Action//self.board_size,Action%self.board_size,num+1
+	def add_pos_to_action(self,x,y,num):
+		return 4+x*self.board_size+y+(num-1)*self.board_size**2
 	def Action_to_string(self,action:int)->str:
-		if 0<=action and action<=3:
+		if self.action_to_type(action)==0:
 			return (['Up','Down','Left','Right'])[action]
-		action-=4
-		if 
+		#type 1(add tile)
+		x,y,num=self.add_action_to_pos(action)
+		return f'Adding a {2**num} at {x},{y}'
+	def action_to_type(self,action):
+		assert action>=0 and action<4+2*self.board_size**2, f'action is {action}'# very likely impossible
+		if action<4:
+			return 0
+		return 1

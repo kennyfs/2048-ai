@@ -1,16 +1,21 @@
+import numpy as np
+
+
 def default_visit_softmax_temperature(num_moves,training_steps):
 	if training_steps < 50e3:
-	  return 1.0
+		return 1.0
 	elif training_steps < 75e3:
-	  return 0.5
+		return 0.5
 	else:
-	  return 0.25
+	 	return 0.25
 
 class Config:
 	def __init__(self,
 				max_moves:int,
 				discount:float,
 				search_threads:int,
+				model_max_threads:int,
+				if_add_exploration_noise:bool,
 				dirichlet_alpha:float,
 				num_simulations:int,
 				board_size:int,
@@ -34,7 +39,9 @@ class Config:
 		self.num_simulations=num_simulations
 		self.discount=discount
 		self.search_threads=search_threads
+		self.model_max_threads=model_max_threads
 		# Root prior exploration noise.
+		self.if_add_exploration_noise=if_add_exploration_noise
 		self.root_dirichlet_alpha=dirichlet_alpha
 		self.root_exploration_fraction=0.25
 
@@ -86,6 +93,8 @@ def default_config():
 		max_moves=1e5,#it can be infinity because any 2048 game is bound to end
 		discount=0.97,
 		search_threads=20,
+		model_max_threads=3000,
+		if_add_exploration_noise=True,
 		dirichlet_alpha=0.3,
 		num_simulations=100,
 		board_size=4,

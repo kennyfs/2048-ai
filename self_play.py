@@ -1,12 +1,17 @@
+import asyncio
 import collections
 import math
+import random
+import sys
 import time
+from typing import Tuple
+
 import numpy as np
 import ray
-import asyncio
-import network
-import sys,random
 import tensorflow as tf
+import environment
+import network
+import config
 MAXIMUM_FLOAT_VALUE=float('inf')
 KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
 class MinMaxStats():
@@ -40,9 +45,9 @@ class GameHistory:####
 		self.child_visits = []
 		self.root_values = []
 		self.reanalysed_predicted_root_values = None
-		# For PER
-		self.priorities = None
-		self.game_priority = None
+		# For PER(not in my plan)
+		# self.priorities = None
+		# self.game_priority = None
 
 	def store_search_statistics(self, root, action_space):
 		# Turn visit count from root into a policy
@@ -64,7 +69,8 @@ class GameHistory:####
 	def get_stacked_observations(self, index, num_stacked_observations):
 		"""
 		Generate a new observation with the observation at the index position
-		and num_stacked_observations past observations and actions stacked.
+		and num_stacked_observations past observations and actions stacked
+		according to gamehistory.
 		"""
 		# Convert to positive index
 		index = index % len(self.observation_history)
@@ -162,23 +168,24 @@ class MCTS:
 		#max_tree_depth = 0
 		for _ in range(self.config.num_simulations):
 			self.manager.add_coroutine_list(self.tree_search(root, now_type, min_max_stats))
-		self.manager.run_coroutine_list()
+		depths=self.manager.run_coroutine_list()
+		max_tree_depth=max(depths)
 		extra_info = {
-			#"max_tree_depth": max_tree_depth,
-			#"root_predicted_value": root_predicted_value,
-		}
+			'max_tree_depth': max_tree_depth,
+			'root_predicted_value': root_predicted_value,
+		}#sometimes useful for debugging or playing?
 		return root, extra_info
-	async def tree_search(self, node, now_type, min_max_stats)->float:
+	async def tree_search(self, node, now_type, min_max_stats)->int:
 		###Independent MCTS, run one simulation###
 		self.running_simulation_num += 1
 
 		# reduce parallel search number
 		with await self.sem:
-			value = await self.start_tree_search(node, now_type, min_max_stats)
+			depth = await self.start_tree_search(node, now_type, min_max_stats)
 			self.running_simulation_num -= 1
 
-			return value
-	async def start_tree_search(self, node, now_type, min_max_stats)->float:
+		return depth
+	async def start_tree_search(self, node, now_type, min_max_stats)->int:
 		now_expanding = self.now_expanding
 
 		while node in now_expanding:
@@ -214,7 +221,7 @@ class MCTS:
 
 		self.backpropagate(search_path, output.value, now_type, min_max_stats)
 
-		#max_tree_depth = max(max_tree_depth, current_tree_depth)
+		return current_tree_depth
 
 		
 
@@ -337,31 +344,35 @@ class SelfPlay:
 	Class which run in a dedicated thread to play games and save them to the replay-buffer.
 	"""
 
-	def __init__(self, initial_checkpoint, Game, config):
+	def __init__(self, initial_checkpoint, Game, config:config.Config):
 		self.config = config
 		self.debug = config.debug
 		seed=config.seed
+		self.add_exploration_noise=config.if_add_exploration_noise
 		if seed==None:
 			seed=random.randrange(sys.maxsize)
 			if self.debug:
 				print(f'seed was set to be {seed}.')
-		self.game = Game(seed)
+		self.game = environment.Environment(seed)####### temporarily set for vs code check
 
 		# Fix random generator seed
 		np.random.seed(seed)
 		tf.random.set_seed(seed)
 
 		# Initialize the network
-		self.model = network.Network(config)
-		self.model.set_weights(initial_checkpoint["weights"])
+		self.model = network.Network(config)# -> AbstractNetwork
 		#### should initialize manager, predictor here
+		manager=network.Manager(config, self.model)
+		manager.set_weights(initial_checkpoint["weights"])
+		self.predictor=network.Predictor(manager)
 	def continuous_self_play(self, shared_storage, replay_buffer, test_mode=False):
 		while (shared_storage.get_info("training_step") < self.config.training_steps
-			)and(
-			not shared_storage.get_info("terminate")):
+				)and(
+				not shared_storage.get_info("terminate")):
 			self.model.set_weights(ray.get(shared_storage.get_info.remote("weights")))
 
 			if test_mode:
+				raise NotImplementedError				
 				pass ####
 				# Take the best action (no exploration) in test mode
 				'''
@@ -404,7 +415,7 @@ class SelfPlay:
 					self.config.visit_softmax_temperature_fn(
 						trained_steps=shared_storage.get_info
 					),
-					False,
+					False,### if want to render, change this
 				)
 
 				replay_buffer.save_game(game_history, shared_storage)
@@ -433,19 +444,28 @@ class SelfPlay:
 		Play one game with actions based on the Monte Carlo tree search at each moves.
 		"""
 		game_history = GameHistory()
+		# start a whole new game
 		self.game.reset()
+		#self.game should keep now_type
 		observation = self.game.get_features()
-		#initial position
+		#initial position #### I'm not sure whether or not I should keep this
 		game_history.action_history.append(None)
 		game_history.observation_history.append(observation)
-		game_history.reward_history.append(None)
-		game_history.type_history.append(self.game.type())
-
+		game_history.reward_history.append(0)
+		game_history.type_history.append()
+		for _ in range(2):
+			action=self.game.add()
+			observation=self.game.get_features()
+			game_history.action_history.append(action)
+			game_history.observation_history.append(observation)
+			game_history.reward_history.append(0)
+			game_history.type_history.append(1)
+			
 		done = False
 
 		if render:
+			print('A new game just started.')
 			self.game.render()
-
 		while not done and len(game_history.action_history) <= self.config.max_moves:
 			assert (
 				len(np.array(observation).shape) == 3
@@ -453,20 +473,16 @@ class SelfPlay:
 			assert (
 				np.array(observation).shape == self.config.observation_shape
 			), f"Observation should match the observation_shape defined in MuZeroConfig. Expected {self.config.observation_shape} but got {np.array(observation).shape}."
+			'''#This will only be useful if 
 			stacked_observations = game_history.get_stacked_observations(
 				-1,
 				self.config.stacked_observations,
 			)
-
+			'''
+			observation = self.game.get_features()
 			# Choose the action
-			
-			root, mcts_info = MCTS(self.config).run(
-				self.model,
-				stacked_observations,
-				self.game.legal_actions(),
-				self.game.to_play(),
-				True,
-			)
+			legal_actions=self.game.legal_actions()
+			root, mcts_info = MCTS(self.config).run(self.predictor,observation,legal_actions,self.game.now_type)
 			action = self.select_action(
 				root,
 				temperature
@@ -478,7 +494,7 @@ class SelfPlay:
 					f"Root value for player {self.game.to_play()}: {root.value():.2f}"
 				)
 			reward = self.game.step(action)
-
+			done=self.game.finish()
 			if render:
 				print(f"Played action: {self.game.action_to_string(action)}")
 				self.game.render()

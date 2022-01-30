@@ -5,7 +5,9 @@
 可能已經做完[self_play.py](self_play.py)中的MCTS。  
 總之先把目前進度上傳，仍需要很多努力。
 ## todo  
-- [ ] 完成[self_play.py](self_play.py)中的SelfPlay  
-- [ ] 修改[environment.py](environment.py)中的Game  
-- [ ] 訓練
-- [ ] 主要的流程控制
+- [x] 完成[self_play.py](self_play.py)中的SelfPlay  
+- [x] [environment.py](environment.py)捨棄Game，全部改用Environment  
+- [ ] 訓練  
+- [ ] 主要的流程控制  
+- [ ] replay buffer  
+- [ ] shared storage  
