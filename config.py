@@ -75,13 +75,14 @@ class Config:
 		self.checkpoint_interval=int(5e2)
 		self.window_size=int(1e6)#max game cnt stored in replaybuffer
 		self.batch_size=batch_size
-		self.num_unroll_steps=5
+		self.num_unroll_steps=10
+		#count adding(type 1), but not count them as network training target
 		self.td_steps=td_steps
 
 		self.weight_decay=1e-4
 		self.momentum=0.9
 
-		#Exponentiallearningrateschedule
+		#Exponential learning rate schedule
 		self.lr_init=lr_init
 		self.lr_decay_rate=0.1
 		self.lr_decay_steps=lr_decay_steps

@@ -56,11 +56,19 @@ NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state',
 #action:			one-hotted, in shape of (batch_size,4+2*boardsize**2)
 #policy:			in shape of (batch_size,4(UDLR))
 #value and reward:	in shape of (batch_size,full_support_size) if using support, else (batch_size,1) #about "support", described at config.py:53
-def my_expand_dims(inputs,expected_shape_length):
-	while len(inputs.shape)<expected_shape_length:
-		inputs=np.expand_dims(inputs,axis=0)
+def my_adjust_dims(inputs,expected_shape_length):
+	delta=len(inputs.shape)-expected_shape_length
+	if delta<0:
+		inputs=np.expand_dims(inputs,axis=list(range(-delta)))
+	if delta>0:
+		inputs=inputs.reshape((*inputs.shape[:-delta-1],-1))
 	return inputs
 class AbstractNetwork(ABC):
+	'''
+	If directly call initial and recurrent inference of Network's,
+	it means directly get result, without queuing(so with batch size).
+	(This is for training)
+	'''
 	def __init__(self):
 		super().__init__()
 		pass
@@ -79,7 +87,33 @@ class AbstractNetwork(ABC):
 	def prediction(self, hidden_state):
 		#output:policy,value
 		pass
-		
+	
+	def initial_inference(self, observation)->NetworkOutput:
+		'''
+		directly inference, for training and reanalyse
+		input shape: batch, channel, width, height
+		'''
+		assert len(observation.shape)==4
+		hidden_state=scale_hidden_state(self.representation(observation))
+		#hidden_state:batch, hidden_size
+		policy,value=self.prediction(hidden_state)
+		#policy:batch, 4
+		#value:batch, 1 if not support, else batch, support*2+1
+		return NetworkOutput(policy=policy,value=value,reward=None,hidden_state=hidden_state)
+	def recurrent_inference(self, hidden_state, action):
+		'''
+		directly inference, for training
+		'''
+		hidden_state, reward=self.dynamics(hidden_state, action)
+		hidden_state=scale_hidden_state(hidden_state)
+		policy,value=self.prediction(hidden_state)
+		return NetworkOutput(policy=policy,value=value,reward=reward,hidden_state=hidden_state)
+	@abstractmethod
+	def get_weights(self):
+		pass
+	@abstractmethod
+	def set_weights(self,weights):
+		pass
 class Network:
 	def __new__(cls,config):
 		if config.network_type=="fullyconnected":
@@ -117,13 +151,17 @@ class FullyConnectedNetwork(AbstractNetwork):
 			4,#policy
 			self.full_support_size)#value
 	def representation(self, observation):
-		observation=my_expand_dims(observation, 4)
+		observation=my_adjust_dims(observation, 2)
 		return self.representation_model(observation)
-	def dynamics(self, concatenated_inputs):
-		concatenated_inputs=my_expand_dims(concatenated_inputs, 2)
+	def dynamics(self, hidden_state, action):
+		'''
+		hidden state can be flattened or not
+		'''
+		hidden_state=my_adjust_dims(hidden_state, 2)
+		concatenated_inputs=np.concatenate((hidden_state,action),axis=0)
 		return self.dynamics_model(concatenated_inputs)
 	def prediction(self, hidden_state):
-		hidden_state=my_expand_dims(hidden_state, 2)
+		hidden_state=my_adjust_dims(hidden_state, 2)
 		return self.prediction_model(hidden_state)
 	class one_output_model(tf.keras.Model):
 		def __init__(self,input_size,sizes,output_size):
@@ -186,6 +224,30 @@ class FullyConnectedNetwork(AbstractNetwork):
 	def prediction(self,hidden_state):
 		policy,value=self.prediction_model(hidden_state)
 		return policy,value
+	def get_weights(self):
+		return {'representation':self.representation_model.get_weights(),'dynamics':self.dynamics_model.get_weights(),'prediction':self.prediction_model.get_weights()}
+	def set_weights(self,weights):
+		'''
+		set weights of 3 networks
+		weights can be {name(str):weights(np.ndarray)}
+		or list of 3 weights [weights(np.ndarray)]
+		'''
+		if isinstance(weights,dict):
+			for name,weight in weights.items():
+				if name=='representation':
+					self.representation_model.set_weights(weight)
+				elif name=='dynamics':
+					self.dynamics_model.set_weights(weight)
+				elif name=='prediction':
+					self.prediction_model.set_weights(weight)
+				else:
+					raise NotImplementedError
+		elif isinstance(weights,list):
+			self.representation_model.set_weights(weights[0])
+			self.dynamics_model.set_weights(weights[1])
+			self.prediction_model.set_weights(weights[2])
+		else:
+			raise NotImplementedError
 QueueItem=collections.namedtuple("QueueItem",['inputs','future'])
 class Manager:
 	'''
@@ -200,6 +262,7 @@ class Manager:
 		
 		self.loop=asyncio.get_event_loop()
 		#callable model
+		self.model=model
 		self.representation=model.representation
 		self.dynamics=model.dynamics
 		self.prediction=model.prediction
@@ -236,29 +299,9 @@ class Manager:
 				return False
 		return True
 	def get_weights(self):
-		return {'representation':self.representation.get_weights(),'dynamics':self.dynamics.get_weights(),'prediction':self.prediction.get_weights()}
+		return self.model.get_weights()
 	def set_weights(self,weights):
-		'''
-		set weights of 3 networks
-		weights can be {name(str):weights(np.ndarray)}
-		or list of 3 weights [weights(np.ndarray)]
-		'''
-		if isinstance(weights,dict):
-			for name,weight in weights.items():
-				if name=='representation':
-					self.representation.set_weights(weight)
-				elif name=='dynamics':
-					self.dynamics.set_weights(weight)
-				elif name=='prediction':
-					self.prediction.set_weights(weight)
-				else:
-					raise NotImplementedError
-		elif isinstance(weights,list):
-			self.representation.set_weights(weights[0])
-			self.dynamics.set_weights(weights[1])
-			self.prediction.set_weights(weights[2])
-		else:
-			raise NotImplementedError
+		self.model.set_weights(weights)
 	async def prediction_worker(self):
 		"""For better performance, queue prediction requests and predict together in this worker.
 		speed up about 3x.

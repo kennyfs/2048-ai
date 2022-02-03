@@ -9,5 +9,7 @@
 - [x] [environment.py](environment.py)捨棄Game，全部改用Environment  
 - [ ] 訓練  
 - [ ] 主要的流程控制  
-- [ ] replay buffer  
-- [ ] shared storage  
+- [] replay buffer(priority還沒，應該很快)  
+- [ ] shared storage(剩下儲存到檔案的方式)  
+## 理解
+1. value target: bootstrap---value is expectant reward, so expectant score=value+reward in past

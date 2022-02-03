@@ -34,23 +34,28 @@ class MinMaxStats():
 class GameHistory:####
 	"""
 	Store only usefull information of a self-play game.
+	at time t, gamehistory[t] should contain the information about:
+	observation, value, child_visits at time t
+	action, reward, action type from t-1 to t
 	"""
 
 	def __init__(self):
 		self.observation_history = []
 		self.action_history = []
 		self.reward_history = []
-		self.to_play_history = []
 		self.type_history = []
 		self.child_visits = []
 		self.root_values = []
+		self.length = 0
 		self.reanalysed_predicted_root_values = None
 		# For PER(not in my plan)
 		# self.priorities = None
 		# self.game_priority = None
 
 	def store_search_statistics(self, root, action_space):
-		# Turn visit count from root into a policy
+		'''
+		Turn visit count from root into a policy, store policy and valuesss
+		'''
 		if root is not None:
 			sum_visits = sum(child.visit_count for child in root.children.values())
 			self.child_visits.append(
@@ -73,7 +78,7 @@ class GameHistory:####
 		according to gamehistory.
 		"""
 		# Convert to positive index
-		index = index % len(self.observation_history)
+		index = index % self.length
 
 		stacked_observations = self.observation_history[index].copy()
 		for past_observation_index in reversed(
@@ -102,6 +107,9 @@ class GameHistory:####
 			)
 
 		return stacked_observations
+	def get_observation(self, index):
+		index = index % self.length
+		return self.observation_history[index].copy()
 class MCTS:
 	"""
 	Core Monte Carlo Tree Search algorithm.
@@ -291,7 +299,6 @@ class MCTS:
 class Node:
 	def __init__(self, prior):
 		self.visit_count = 0
-		self.to_play = -1
 		self.prior = prior
 		self.value_sum = 0
 		self.children = {}
@@ -366,9 +373,9 @@ class SelfPlay:
 		manager.set_weights(initial_checkpoint["weights"])
 		self.predictor=network.Predictor(manager)
 	def continuous_self_play(self, shared_storage, replay_buffer, test_mode=False):
-		while (shared_storage.get_info("training_step") < self.config.training_steps
+		while (ray.get(shared_storage.get_info.remote("training_step")) < self.config.training_steps
 				)and(
-				not shared_storage.get_info("terminate")):
+				not ray.get(shared_storage.get_info.remote("terminate"))):
 			self.model.set_weights(ray.get(shared_storage.get_info.remote("weights")))
 
 			if test_mode:
@@ -418,7 +425,7 @@ class SelfPlay:
 					False,### if want to render, change this
 				)
 
-				replay_buffer.save_game(game_history, shared_storage)
+				replay_buffer.save_game.remote(game_history, shared_storage)
 				
 
 			# Managing the self-play / training ratio
@@ -426,14 +433,14 @@ class SelfPlay:
 				time.sleep(self.config.self_play_delay)
 			if not test_mode and self.config.ratio:
 				while (
-					shared_storage.get_info("training_step") / max(
-						1, shared_storage.get_info("num_played_steps")
+					shared_storage.get_info.remote("training_step") / max(
+						1, shared_storage.get_info.remote("num_played_steps")
 					) < self.config.ratio####
 					and 
-					shared_storage.get_info("training_step")
+					shared_storage.get_info.remote("training_step")
 					< self.config.training_steps
 					and 
-					not shared_storage.get_info("terminate")
+					not shared_storage.get_info.remote("terminate")
 				):
 					time.sleep(0.5)
 
@@ -451,8 +458,11 @@ class SelfPlay:
 		#initial position #### I'm not sure whether or not I should keep this
 		game_history.action_history.append(None)
 		game_history.observation_history.append(observation)
-		game_history.reward_history.append(0)
-		game_history.type_history.append()
+		game_history.reward_history.append(None)
+		game_history.type_history.append(None)
+		game_history.length+=1
+		#training target can be started at a time where the next move is adding move, so keep all observation history
+
 		for _ in range(2):
 			action=self.game.add()
 			observation=self.game.get_features()
@@ -460,91 +470,72 @@ class SelfPlay:
 			game_history.observation_history.append(observation)
 			game_history.reward_history.append(0)
 			game_history.type_history.append(1)
-			
+			game_history.length+=1
+		for _ in range(3):
+			game_history.root_values.append(None)
+			game_history.child_visits.append(None)
 		done = False
 
 		if render:
 			print('A new game just started.')
 			self.game.render()
+		assert self.game.now_type==0
 		while not done and len(game_history.action_history) <= self.config.max_moves:
-			assert (
-				len(np.array(observation).shape) == 3
-			), f"Observation should be 3 dimensionnal instead of {len(np.array(observation).shape)} dimensionnal. Got observation of shape: {np.array(observation).shape}"
-			assert (
-				np.array(observation).shape == self.config.observation_shape
-			), f"Observation should match the observation_shape defined in MuZeroConfig. Expected {self.config.observation_shape} but got {np.array(observation).shape}."
-			'''#This will only be useful if 
-			stacked_observations = game_history.get_stacked_observations(
-				-1,
-				self.config.stacked_observations,
-			)
-			'''
-			observation = self.game.get_features()
-			# Choose the action
-			legal_actions=self.game.legal_actions()
-			root, mcts_info = MCTS(self.config).run(self.predictor,observation,legal_actions,self.game.now_type)
-			action = self.select_action(
-				root,
-				temperature
-			)
-
-			if render:
-				print(f'Tree depth: {mcts_info["max_tree_depth"]}')
-				print(
-					f"Root value for player {self.game.to_play()}: {root.value():.2f}"
+			if self.game.now_type==0:
+				assert (
+					len(np.array(observation).shape) == 3
+				), f"Observation should be 3 dimensionnal instead of {len(np.array(observation).shape)} dimensionnal. Got observation of shape: {np.array(observation).shape}"
+				assert (
+					np.array(observation).shape == self.config.observation_shape
+				), f"Observation should match the observation_shape defined in MuZeroConfig. Expected {self.config.observation_shape} but got {np.array(observation).shape}."
+				'''#This will only be useful if 
+				stacked_observations = game_history.get_stacked_observations(
+					-1,
+					self.config.stacked_observations,
 				)
-			reward = self.game.step(action)
-			done=self.game.finish()
-			if render:
-				print(f"Played action: {self.game.action_to_string(action)}")
-				self.game.render()
+				'''
+				# Choose the action
+				legal_actions=self.game.legal_actions()
+				root, mcts_info = MCTS(self.config).run(self.predictor,observation,legal_actions,self.game.now_type)
+				action = self.select_action(
+					root,
+					temperature
+				)
 
-			game_history.store_search_statistics(root, self.config.action_space)
+				if render:
+					print(f'Tree depth: {mcts_info["max_tree_depth"]}')
+					print(
+						f"Root value : {root.value():.2f}"
+					)
+				reward = self.game.step(action)#type changed here
+				done=self.game.finish()
+				observation=self.game.get_features()
+				if render:
+					print(f"Played action: {self.game.action_to_string(action)}")
+					self.game.render()
 
-			# Next batch
-			game_history.action_history.append(action)
-			game_history.observation_history.append(observation)
-			game_history.reward_history.append(reward)
-			game_history.to_play_history.append(self.game.to_play())
+				game_history.store_search_statistics(root, self.config.action_space_type0)
+
+				# Next batch
+				game_history.action_history.append(action)
+				game_history.observation_history.append(observation)
+				game_history.reward_history.append(reward)
+				game_history.type_history.append(0)
+				game_history.length+=1
+			else:
+				action=self.game.add()
+				self.game.change_type()
+				observation=self.game.get_features()
+				game_history.action_history.append(action)
+				game_history.observation_history.append(observation)
+				game_history.reward_history.append(0)
+				game_history.type_history.append(1)
+				game_history.length+=1
 
 		return game_history
 
 	def close_game(self):
 		self.game.close()
-
-	def select_opponent_action(self, opponent, stacked_observations):
-		"""
-		Select opponent action for evaluating MuZero level.
-		"""
-		if opponent == "human":
-			root, mcts_info = MCTS(self.config).run(
-				self.model,
-				stacked_observations,
-				self.game.legal_actions(),
-				self.game.to_play(),
-				True,
-			)
-			print(f'Tree depth: {mcts_info["max_tree_depth"]}')
-			print(f"Root value for player {self.game.to_play()}: {root.value():.2f}")
-			print(
-				f"Player {self.game.to_play()} turn. MuZero suggests {self.game.action_to_string(self.select_action(root, 0))}"
-			)
-			return self.game.human_to_action(), root
-		elif opponent == "expert":
-			return self.game.expert_agent(), None
-		elif opponent == "random":
-			assert (
-				self.game.legal_actions()
-			), f"Legal actions should not be an empty array. Got {self.game.legal_actions()}."
-			assert set(self.game.legal_actions()).issubset(
-				set(self.config.action_space)
-			), "Legal actions should be a subset of the action space."
-
-			return np.random.choice(self.game.legal_actions()), None
-		else:
-			raise NotImplementedError(
-				'Wrong argument: "opponent" argument should be "self", "human", "expert" or "random"'
-			)
 
 	@staticmethod
 	def select_action(node, temperature):
@@ -552,6 +543,7 @@ class SelfPlay:
 		Select action according to the visit count distribution and the temperature.
 		The temperature is changed dynamically with the visit_softmax_temperature function
 		in the config.
+		this function always choose from actions with type==0
 		"""
 		visit_counts = np.array(
 			[child.visit_count for child in node.children.values()], dtype="int32"

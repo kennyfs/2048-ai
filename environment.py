@@ -41,6 +41,7 @@ class Environment:
 		'''
 		self.grid=[[0]*self.board_size for _ in range(self.board_size)]
 		self.score=0
+		self.now_type=0
 	def movealine(self,line,reverse):#move from self.board_size-1 to 0
 		if reverse:
 			line=line[::-1]#reverse
@@ -164,7 +165,7 @@ class Environment:
 		return np.array(result)
 		'''
 	def change_type(self):
-		self.now_type=1 if self.now_type==2 else 2
+		self.now_type=1 if self.now_type==0 else 1
 	def add_action_to_pos(self,Action:int):
 		'''
 		return type:
@@ -177,7 +178,7 @@ class Environment:
 		return Action//self.board_size,Action%self.board_size,num+1
 	def add_pos_to_action(self,x,y,num):
 		return 4+x*self.board_size+y+(num-1)*self.board_size**2
-	def Action_to_string(self,action:int)->str:
+	def action_to_string(self,action:int)->str:
 		if self.action_to_type(action)==0:
 			return (['Up','Down','Left','Right'])[action]
 		#type 1(add tile)
