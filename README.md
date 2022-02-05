@@ -7,9 +7,10 @@
 ## todo  
 - [x] 完成[self_play.py](self_play.py)中的SelfPlay  
 - [x] [environment.py](environment.py)捨棄Game，全部改用Environment  
-- [ ] 訓練  
+- [X] 訓練  
 - [ ] 主要的流程控制  
-- [] replay buffer(priority還沒，應該很快)  
-- [ ] shared storage(剩下儲存到檔案的方式)  
+- [X] replay buffer重新加入priority  
+- [ ] shared storage(未確認引用位置是否寫得正確)  
+- [ ] Network應該要永遠輸出support版的value, reward，目前依照這個設定寫trainer
 ## 理解
 1. value target: bootstrap---value is expectant reward, so expectant score=value+reward in past

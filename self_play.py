@@ -38,7 +38,7 @@ class GameHistory:####
 	observation, value, child_visits at time t
 	action, reward, action type from t-1 to t
 	"""
-
+	#states followed by actions of type x = "type x state"
 	def __init__(self):
 		self.observation_history = []
 		self.action_history = []
@@ -110,6 +110,16 @@ class GameHistory:####
 	def get_observation(self, index):
 		index = index % self.length
 		return self.observation_history[index].copy()
+	def save(self, file):
+		with open(file,'w') as F:
+			for action,reward,type,visits,value in zip(self.action_history,self.reward_history,self.type_history,self.child_visits,self.root_values):
+				F.write(f'{action} {reward} {type} {visits} {value}\n')
+	def add(self, action, observation, reward, _type):
+		self.action_history.append(action)
+		self.observation_history.append(observation)
+		self.reward_history.append(reward)
+		self.type_history.append(_type)
+		self.length+=1
 class MCTS:
 	"""
 	Core Monte Carlo Tree Search algorithm.
@@ -456,21 +466,13 @@ class SelfPlay:
 		#self.game should keep now_type
 		observation = self.game.get_features()
 		#initial position #### I'm not sure whether or not I should keep this
-		game_history.action_history.append(None)
-		game_history.observation_history.append(observation)
-		game_history.reward_history.append(None)
-		game_history.type_history.append(None)
-		game_history.length+=1
+		game_history.add(None,observation,None,None)
 		#training target can be started at a time where the next move is adding move, so keep all observation history
 
 		for _ in range(2):
 			action=self.game.add()
 			observation=self.game.get_features()
-			game_history.action_history.append(action)
-			game_history.observation_history.append(observation)
-			game_history.reward_history.append(0)
-			game_history.type_history.append(1)
-			game_history.length+=1
+			game_history.add(action,observation,None,1)
 		for _ in range(3):
 			game_history.root_values.append(None)
 			game_history.child_visits.append(None)
@@ -517,21 +519,12 @@ class SelfPlay:
 				game_history.store_search_statistics(root, self.config.action_space_type0)
 
 				# Next batch
-				game_history.action_history.append(action)
-				game_history.observation_history.append(observation)
-				game_history.reward_history.append(reward)
-				game_history.type_history.append(0)
-				game_history.length+=1
+				game_history.add(action,observation,reward,0)
 			else:
 				action=self.game.add()
 				self.game.change_type()
 				observation=self.game.get_features()
-				game_history.action_history.append(action)
-				game_history.observation_history.append(observation)
-				game_history.reward_history.append(0)
-				game_history.type_history.append(1)
-				game_history.length+=1
-
+				game_history.add(action,observation,None,1)
 		return game_history
 
 	def close_game(self):

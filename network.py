@@ -25,14 +25,17 @@ def scale_hidden_state(to_scale_hidden_state:np.array):
 	if hidden_state_as_matrix:
 		encoded_state_normalized=tf.reshape(encoded_state_normalized,shape)#and reshape to original shape
 	return encoded_state_normalized
-
-def support_to_scalar(logits, support_size):# logits is in shape (batch_size,full_support_size)
+	
+def support_to_scalar(logits, support_size, from_logits=True):# logits is in shape (batch_size,full_support_size)
 	"""
 	Transform a categorical representation to a scalar
 	See paper appendix F Network Architecture (P.14)
 	"""
 	# Decode to a scalar
-	probabilities=tf.nn.softmax(logits)
+	if from_logits:
+		probabilities=tf.nn.softmax(logits)
+	else:
+		probabilities=logits
 	support=tf.range(-support_size,support_size+1,delta=1,dtype=tf.float32) # in shape (1,full_support_size)
 	support=tf.expand_dims(support,axis=0)
 	support=tf.tile(support,(probabilities.shape[0],1))
@@ -45,6 +48,42 @@ def support_to_scalar(logits, support_size):# logits is in shape (batch_size,ful
 		- 1
 	)
 	return x
+def scalar_to_support(x, support_size):####todo: implement
+	"""
+	Transform a scalar to a categorical representation with (2 * support_size + 1) categories
+	See paper appendix Network Architecture
+	shape of input is (batch, num_unroll_steps+1)
+	"""
+	# Reduce the scale (defined in https://arxiv.org/abs/1805.11593)
+	original_shape = tf.shape(x)
+	x = tf.reshape(x, (-1))#flatten
+	length = x.shape[0]
+	x = tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + 0.001 * x
+	# Encode on a vector
+	x = tf.clip_by_value(x, -support_size, support_size)
+	floor = tf.math.floor(x)
+	prob = x - floor
+	#target: set floor to be 1-prob
+	#		   and floor+1 to be prob
+	floor=tf.cast(floor,'int32')
+	logits = tf.zeros((length * (2 * support_size + 1)))#flattened of (length , 2 * support_size + 1)
+	ori_indices=floor+support_size
+	indices_to_add=tf.range(length)*(2 * support_size + 1)
+	indices=ori_indices+indices_to_add
+	indices=tf.expand_dims(indices, axis=-1)# index is in 1-dimensional
+	logits=tf.tensor_scatter_nd_update(
+		logits,indices=indices,updates=1 - prob
+	)
+	ori_indices=ori_indices+1
+	prob = tf.where(2 * support_size < ori_indices, 0., prob)
+	ori_indices = tf.where(2 * support_size < ori_indices, 0, ori_indices)
+	indices=ori_indices+indices_to_add
+	indices=tf.expand_dims(indices, axis=-1)# index is in 1-dimensional
+	logits=tf.tensor_scatter_nd_update(
+		logits,indices=indices,updates=prob
+	)
+	logits=tf.reshape(logits,(*original_shape,-1))
+	return logits
 
 NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state','value','policy'])
 
@@ -150,6 +189,7 @@ class FullyConnectedNetwork(AbstractNetwork):
 			config.prediction_value_head_size,
 			4,#policy
 			self.full_support_size)#value
+		self.trainable_variables=self.representation_model.trainable_variables+self.dynamics_model.trainable_variables+self.prediction_model.trainable_variables
 	def representation(self, observation):
 		observation=my_adjust_dims(observation, 2)
 		return self.representation_model(observation)

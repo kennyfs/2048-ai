@@ -152,18 +152,19 @@ class Environment:
 			return self.grid[x][y]==0
 		raise BaseException('action('+str(action)+') out of range (in Environment.valid)')
 	def get_features(self)->np.array:#given grid, return features for Network input
+		#10^4 times per second
 		grid=np.array(self.grid)
-		result=np.array([])
-		for i in range(1,self.board_size**2+1):#board_size**2 is max possible tile
-			result=np.concatenate((result,np.where(grid==i,1.0,0.0)),axis=0)
-		return result
-		'''
-		alternative:
 		result=[]
-		for i in range(1,self.board_size**2+1):
+		for i in range(1,self.board_size**2+1):#board_size**2 is max possible tile
 			result.append(np.where(grid==i,1.0,0.0))
 		return np.array(result)
 		'''
+		#alternative:
+		6*10^3 times per second
+		result=np.concatenate([np.expand_dims(np.where(grid==i,1.0,0.0),0) for i in range(1,self.board_size**2+1)],axis=0)
+		return result
+		'''
+		
 	def change_type(self):
 		self.now_type=1 if self.now_type==0 else 1
 	def add_action_to_pos(self,Action:int):
@@ -189,3 +190,12 @@ class Environment:
 		if action<4:
 			return 0
 		return 1
+if __name__=='__main__':
+	import config,time
+	my_config=config.default_config()
+	g=Environment(my_config,[[1,2,3,4],[0,0,0,0],[1,2,6,2],[1,2,5,1]])
+	start=time.time()
+	for _ in range(100000):
+		a=g.get_features()
+	print(a)
+	print(time.time()-start)

@@ -25,7 +25,8 @@ class Config:
 				lr_init:float,
 				lr_decay_steps:float,
 				visit_softmax_temperature_fn,
-				known_bounds=None):
+				known_bounds=None,
+				save_game_to_file=True):
 		### Self-Play
 		self.action_space_type0=list(range(4))
 		self.action_space_type1=list(range(4,4+2*board_size**2))
@@ -57,7 +58,7 @@ class Config:
 		### Network info
 		self.observation_channels=self.board_size**2
 		self.network_type='fullyconnected'#'resnet'/'fullyconnected'/...
-		self.support=0# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
+		self.support=500# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
 		#this = 0 means not using support
 		
 		# Fully Connected Network
@@ -76,6 +77,10 @@ class Config:
 		self.window_size=int(1e6)#max game cnt stored in replaybuffer
 		self.batch_size=batch_size
 		self.num_unroll_steps=10
+		self.optimizer='SGD'
+		self.value_loss_weight=0.5#See paper appendix H Reanalyze
+		self.steps_per_batch=1000
+		self.save_model=True
 		#count adding(type 1), but not count them as network training target
 		self.td_steps=td_steps
 
@@ -87,8 +92,13 @@ class Config:
 		self.lr_decay_rate=0.1
 		self.lr_decay_steps=lr_decay_steps
 
+		self.save_game_to_file=save_game_to_file
+		self.seed=None
 
+		self.PER=True
+		self.PER_alpha=1
 
+		self.debug=False
 def default_config():
 	return Config(
 		max_moves=1e5,#it can be infinity because any 2048 game is bound to end

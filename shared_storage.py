@@ -1,5 +1,6 @@
+import copy
 import os
-from copy import deepcopy as dc
+import pickle
 
 import ray
 import tensorflow as tf
@@ -9,20 +10,21 @@ import tensorflow as tf
 class SharedStorage:
     """
     Class which run in a dedicated thread to store the network weights and some information.
+    is not necessarily responsible for save to file
     """
 
     def __init__(self, checkpoint, config):
         self.config = config
-        self.current_checkpoint = dc(checkpoint)
+        self.current_checkpoint = copy.deepcopy(checkpoint)
 
     def save_checkpoint(self, path=None):
         if not path:
             path = os.path.join(self.config.results_path, "model.checkpoint")
-
-        torch.save(self.current_checkpoint, path)
+        with open(path,'wb') as F:
+            pickle.dump(self.current_checkpoint,F)
 
     def get_checkpoint(self):
-        return dc(self.current_checkpoint)
+        return copy.deepcopy(self.current_checkpoint)
 
     def get_info(self, keys):
         if isinstance(keys, str):
