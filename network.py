@@ -1,8 +1,6 @@
 import asyncio
 import collections
 from abc import ABC, abstractmethod
-from copy import deepcopy as dc
-from time import time
 
 import numpy as np
 import tensorflow as tf
@@ -115,16 +113,20 @@ class AbstractNetwork(ABC):
 	@abstractmethod
 	def representation(self,observation):
 		#output:hidden_state
+		#hidden state is scaled
 		pass
 		
 	@abstractmethod
 	def dynamics(self, hidden_state, action):
-		#output:hidden_state,reward
+		#output: hidden_state,reward
+		#hidden state is scaled
+		#reward is in logits
 		pass
 		
 	@abstractmethod
 	def prediction(self, hidden_state):
-		#output:policy,value
+		#output: policy,value
+		#value is in logits
 		pass
 	
 	def initial_inference(self, observation)->NetworkOutput:
@@ -133,7 +135,7 @@ class AbstractNetwork(ABC):
 		input shape: batch, channel, width, height
 		'''
 		assert len(observation.shape)==4
-		hidden_state=scale_hidden_state(self.representation(observation))
+		hidden_state=self.representation(observation)
 		#hidden_state:batch, hidden_size
 		policy,value=self.prediction(hidden_state)
 		#policy:batch, 4
@@ -153,6 +155,9 @@ class AbstractNetwork(ABC):
 	@abstractmethod
 	def set_weights(self,weights):
 		pass
+	@abstractmethod
+	def summary(self):
+		pass
 class Network:
 	def __new__(cls,config):
 		if config.network_type=="fullyconnected":
@@ -164,10 +169,7 @@ class FullyConnectedNetwork(AbstractNetwork):
 		super().__init__()
 		#config
 		self.config=config
-		if config.support:
-			self.full_support_size=2*config.support_size+1
-		else:
-			self.full_support_size=1
+		self.full_support_size=2*config.support+1
 		self.support=config.support
 		
 		#network
@@ -186,31 +188,36 @@ class FullyConnectedNetwork(AbstractNetwork):
 		self.prediction_model=self.two_outputs_model(
 			config.hidden_state_size,
 			config.prediction_size,
+			config.prediction_policy_head_size,
 			config.prediction_value_head_size,
 			4,#policy
 			self.full_support_size)#value
 		self.trainable_variables=self.representation_model.trainable_variables+self.dynamics_model.trainable_variables+self.prediction_model.trainable_variables
 	def representation(self, observation):
 		observation=my_adjust_dims(observation, 2)
-		return self.representation_model(observation)
+		return scale_hidden_state(self.representation_model(observation))
 	def dynamics(self, hidden_state, action):
 		'''
 		hidden state can be flattened or not
 		'''
 		hidden_state=my_adjust_dims(hidden_state, 2)
 		concatenated_inputs=np.concatenate((hidden_state,action),axis=0)
-		return self.dynamics_model(concatenated_inputs)
+		hidden_state,reward=self.dynamics_model(concatenated_inputs)
+		hidden_state=scale_hidden_state(hidden_state)
+		return hidden_state,reward
 	def prediction(self, hidden_state):
 		hidden_state=my_adjust_dims(hidden_state, 2)
 		return self.prediction_model(hidden_state)
 	class one_output_model(tf.keras.Model):
 		def __init__(self,input_size,sizes,output_size):
 			super().__init__()
-			self.layers=[tf.keras.layers.Flatten()]
+			self.my_layers=[tf.keras.layers.Flatten()]
 			for size in sizes+[output_size]:
-				self.layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
+				self.my_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
+			self.build([10,input_size])
+
 		def call(self,x,training=False):
-			for layer in self.layers:
+			for layer in self.my_layers:
 				x=layer(x)
 			return x
 			
@@ -235,16 +242,17 @@ class FullyConnectedNetwork(AbstractNetwork):
 				
 			for size in second_head_size+[second_output_size]:
 				self.second_head_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
+			self.build([10,input_size])
 
 		def call(self,x,training=False):
 			for layer in self.common_layers:
 				x=layer(x)
 			
-			first=dc(x)
+			first=x
 			for layer in self.first_head_layers:
 				first=layer(first)
 			
-			second=dc(x)
+			second=x
 			for layer in self.second_head_layers:
 				second=layer(second)
 			return first,second
@@ -288,6 +296,13 @@ class FullyConnectedNetwork(AbstractNetwork):
 			self.prediction_model.set_weights(weights[2])
 		else:
 			raise NotImplementedError
+	def summary(self):
+		ret=''
+		for model in self.representation_model,self.dynamics_model,self.prediction_model:
+			stringlist = []
+			model.summary(print_fn=lambda x: stringlist.append(x))
+			ret += "\n".join(stringlist)
+		return ret
 QueueItem=collections.namedtuple("QueueItem",['inputs','future'])
 class Manager:
 	'''
@@ -311,19 +326,18 @@ class Manager:
 		self.prediction_queue=asyncio.queues.Queue(config.model_max_threads)
 		
 		self.coroutine_list=[self.prediction_worker()]
-		async def push_queue_func(features,network:str):#network means which to use. If passing string consumes too much time, pass int instead.
-			future=self.loop.create_future()
-			item=QueueItem(features,future)
-			if network=='representation':
-				await self.representation_queue.put(item)
-			elif network=='dynamics':
-				await self.dynamics_queue.put(item)
-			elif network=='prediction':
-				await self.prediction_queue.put(item)
-			else:
-				raise NotImplementedError
-			return future
-		self.push_queue=push_queue_func
+	async def push_queue(self, features, network:str):#network means which to use. If passing string consumes too much time, pass int instead.
+		future=self.loop.create_future()
+		item=QueueItem(features,future)
+		if network=='representation':
+			await self.representation_queue.put(item)
+		elif network=='dynamics':
+			await self.dynamics_queue.put(item)
+		elif network=='prediction':
+			await self.prediction_queue.put(item)
+		else:
+			raise NotImplementedError
+		return future
 		
 	def add_coroutine_list(self,toadd):
 		#if toadd not in self.coroutine_list:
@@ -361,17 +375,16 @@ class Manager:
 				inputs=np.concatenate([np.expand_dims(item.inputs,axis=0) for item in item_list], axis=0)
 				#print('nn',len(item_list))
 				with tf.device('/device:GPU:0'):
-					start=time()
+					#start=time()
 					results = func(inputs)
-					print('inference:',time()-start)
+					#print('inference:',time()-start)
 				if name=='representation':
-					hidden_state=scale_hidden_state(results)#scale hidden state
+					hidden_state=results
 					assert hidden_state.shape[0]==len(item_list), 'sizes of hidden_state('+hidden_state.shape+') and item_list('+len(item_list)+') don\'t match, this should never happen.'
 					for i in range(len(item_list)):
 						item_list[i].future.set_result(hidden_state[i])
 				elif name=='dynamics':
 					hidden_state,reward=results
-					hidden_state=scale_hidden_state(hidden_state)#scale hidden state
 					assert hidden_state.shape[0]==len(item_list) and reward.shape[0]==len(item_list), 'sizes of hidden_state('+hidden_state.shape+'), reward('+reward.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
 					if self.support:
 						reward=support_to_scalar(reward,self.support)
@@ -385,7 +398,10 @@ class Manager:
 					for i in range(len(item_list)):
 						item_list[i].future.set_result((policy[i],value[i]))
 class Predictor:
-	def __init__(self,manager):
+	'''
+	queuing and predict with manager
+	'''
+	def __init__(self,manager:Manager):
 		self.manager=manager
 		self.push_queue=manager.push_queue
 		
@@ -400,7 +416,7 @@ class Predictor:
 			observation: whether flattened or not and without batchsize
 			it will be flattened in tf.keras.layers.Flatten
 		'''
-		hidden_state=scale_hidden_state(await self.get_outputs(observation,'representation'))#scaled
+		hidden_state=await self.get_outputs(observation,'representation')#already scaled
 		policy,value=await self.get_outputs(hidden_state,'prediction')
 		return NetworkOutput(reward=0,hidden_state=hidden_state,value=value,policy=policy)
 
@@ -412,12 +428,14 @@ class Predictor:
 			hidden_state:(hidden_state_size(32)) or (hidden_state_size_x,hidden_state_size_y)
 			action:one-hotted, (4+2*boardsize**2)
 		'''
-		if len(hidden_state.shape)==2:
-			hidden_state.flatten()
+		hidden_state=my_adjust_dims(hidden_state, 1)
 		inputs=np.concatenate((hidden_state,action),axis=0)
-		new_hidden_state,reward=await self.get_outputs(inputs,'dynamics')
-		new_hidden_state=scale_hidden_state(new_hidden_state)#scaled
+		new_hidden_state,reward=await self.get_outputs(inputs,'dynamics')#hidden state is already scaled
 		
 		policy,value=await self.get_outputs(new_hidden_state,'prediction')
 		
 		return NetworkOutput(reward=reward,hidden_state=new_hidden_state,value=value,policy=policy)
+	'''def run_coroutine_list(self):
+		return self.manager.run_coroutine_list()
+	def add_coroutine_list(self, toadd):
+		self.manager.add_coroutine_list(toadd)#if efficiency is too low, directly append to the list'''

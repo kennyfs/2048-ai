@@ -166,7 +166,7 @@ class Environment:
 		'''
 		
 	def change_type(self):
-		self.now_type=1 if self.now_type==0 else 1
+		self.now_type=1 if self.now_type==0 else 0
 	def add_action_to_pos(self,Action:int):
 		'''
 		return type:
@@ -190,12 +190,3 @@ class Environment:
 		if action<4:
 			return 0
 		return 1
-if __name__=='__main__':
-	import config,time
-	my_config=config.default_config()
-	g=Environment(my_config,[[1,2,3,4],[0,0,0,0],[1,2,6,2],[1,2,5,1]])
-	start=time.time()
-	for _ in range(100000):
-		a=g.get_features()
-	print(a)
-	print(time.time()-start)

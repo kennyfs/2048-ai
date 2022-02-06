@@ -4,14 +4,12 @@ import math
 import random
 import sys
 import time
-from typing import Tuple
 
 import numpy as np
 import ray
 import tensorflow as tf
-import environment
 import network
-import config
+import my_config
 MAXIMUM_FLOAT_VALUE=float('inf')
 KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
 class MinMaxStats():
@@ -130,16 +128,15 @@ class MCTS:
 
 	def __init__(self, config, predictor):
 		self.config = config
-		self.push_queue = predictor.manager.push_queue_func
-		self.manager = predictor.manager
+		self.predictor=predictor
+		self.push_queue = predictor.push_queue
 		self.sem=asyncio.Semaphore(config.search_threads)
 		self.now_expanding=set()
 		self.expanded=set()
 	async def run(self,
-			predictor,
 			observation, 
 			legal_actions,
-			now_type,
+			now_type,#is for next action
 			add_exploration_noise,
 			override_root_with=None):
 		"""
@@ -154,19 +151,21 @@ class MCTS:
 		else:
 			#defaulted not to use previously searched nodes and create a new tree
 			root = Node(0)
-			output=await predictor.initial_inference(observation)
+			output=await self.predictor.initial_inference(observation)
 			
 			root_predicted_value=output.value
 			reward=output.reward
 			policy_logits=output.policy
 			hidden_state=output.hidden_state
 			assert len(legal_actions)>0, 'Legal actions should not be an empty array.'
+			#only for check if actions are legal(unnecessary)
 			flag=1
 			for action in legal_actions:
 				if action<0 or action>=4:
 					flag=0
 					break
 			assert flag, f'Legal actions should be a subset of the action space. Got {legal_actions}'
+
 			root.expand(
 				legal_actions,
 				now_type,
@@ -185,25 +184,27 @@ class MCTS:
 
 		#max_tree_depth = 0
 		for _ in range(self.config.num_simulations):
-			self.manager.add_coroutine_list(self.tree_search(root, now_type, min_max_stats))
-		depths=self.manager.run_coroutine_list()
-		max_tree_depth=max(depths)
+			self.predictor.manager.add_coroutine_list(self.tree_search(root, now_type, min_max_stats))
+		self.predictor.manager.run_coroutine_list()
 		extra_info = {
-			'max_tree_depth': max_tree_depth,
 			'root_predicted_value': root_predicted_value,
 		}#sometimes useful for debugging or playing?
 		return root, extra_info
-	async def tree_search(self, node, now_type, min_max_stats)->int:
+	async def tree_search(self, node, now_type, min_max_stats):#->int|None:
 		###Independent MCTS, run one simulation###
 		self.running_simulation_num += 1
 
 		# reduce parallel search number
 		with await self.sem:
-			depth = await self.start_tree_search(node, now_type, min_max_stats)
+			if self.config.debug:
+				depth = await self.start_tree_search(node, now_type, min_max_stats)
+			else:
+				await self.start_tree_search(node, now_type, min_max_stats)
 			self.running_simulation_num -= 1
 
-		return depth
-	async def start_tree_search(self, node, now_type, min_max_stats)->int:
+		if self.config.debug:
+			return depth
+	async def start_tree_search(self, node, now_type, min_max_stats):#->int|None:
 		now_expanding = self.now_expanding
 
 		while node in now_expanding:
@@ -239,7 +240,8 @@ class MCTS:
 
 		self.backpropagate(search_path, output.value, now_type, min_max_stats)
 
-		return current_tree_depth
+		if self.config.debug:
+			return current_tree_depth
 
 		
 
@@ -255,7 +257,7 @@ class MCTS:
 			assert sum(p)==1
 			action=np.random.choice(list(node.children.keys()),p=p)
 		else:
-			ucb=[self.ucb_score(node, child, min_max_stats) for action,child in node.children.items()]
+			ucb=[self.ucb_score(node, child, min_max_stats) for child in node.children.values()]
 			max_ucb = max(ucb)
 			action = np.random.choice(
 				[
@@ -355,84 +357,60 @@ class Node:
 		frac = exploration_fraction
 		for a, n in zip(actions, noise):
 			self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
-
+@ray.remote
 class SelfPlay:
 	"""
 	Class which run in a dedicated thread to play games and save them to the replay-buffer.
 	"""
 
-	def __init__(self, initial_checkpoint, Game, config:config.Config):
+	def __init__(self, predictor:network.Predictor, Game, config:my_config.Config, seed:int):
+		#have to pass seed because each self_play_worker should get different random seed to play different games
 		self.config = config
 		self.debug = config.debug
-		seed=config.seed
 		self.add_exploration_noise=config.if_add_exploration_noise
 		if seed==None:
 			seed=random.randrange(sys.maxsize)
 			if self.debug:
 				print(f'seed was set to be {seed}.')
-		self.game = environment.Environment(seed)####### temporarily set for vs code check
+		self.game = Game(seed)
 
 		# Fix random generator seed
+		random.seed(seed)
 		np.random.seed(seed)
 		tf.random.set_seed(seed)
 
 		# Initialize the network
-		self.model = network.Network(config)# -> AbstractNetwork
-		#### should initialize manager, predictor here
-		manager=network.Manager(config, self.model)
-		manager.set_weights(initial_checkpoint["weights"])
-		self.predictor=network.Predictor(manager)
+		# should initialize manager, predictor at main.py, all selfplayer(self_play_worker*num_actors and test_worker*1)
+		self.predictor=predictor
 	def continuous_self_play(self, shared_storage, replay_buffer, test_mode=False):
 		while (ray.get(shared_storage.get_info.remote("training_step")) < self.config.training_steps
 				)and(
 				not ray.get(shared_storage.get_info.remote("terminate"))):
-			self.model.set_weights(ray.get(shared_storage.get_info.remote("weights")))
+			self.predictor.manager.set_weights(ray.get(shared_storage.get_info.remote("weights")))
 
 			if test_mode:
-				raise NotImplementedError				
-				pass ####
 				# Take the best action (no exploration) in test mode
-				'''
+				# This is for log(to tensorboard), in order to see the progress
 				game_history = self.play_game(
 					0,
-					self.config.temperature_threshold,
 					False,
 				)
 
 				# Save to the shared storage
 				shared_storage.set_info.remote(
 					{
-						"episode_length": len(game_history.action_history) - 1,
-						"total_reward": sum(game_history.reward_history),
-						"mean_value": np.mean(
-							[value for value in game_history.root_values if value]
-						),
+						"game_length": len(game_history.action_history) - 1,#first history is initial state
+						"total_reward": sum(game_history.reward_history),#final score in case of 2048
+						"stdev_reward": np.std(game_history.reward_history),
 					}
 				)
-				if 1 < len(self.config.players):
-					shared_storage.set_info.remote(
-						{
-							"muzero_reward": sum(
-								reward
-								for i, reward in enumerate(game_history.reward_history)
-								if game_history.to_play_history[i - 1]
-								== self.config.muzero_player
-							),
-							"opponent_reward": sum(
-								reward
-								for i, reward in enumerate(game_history.reward_history)
-								if game_history.to_play_history[i - 1]
-								!= self.config.muzero_player
-							),
-						}
-					)
-				'''
+				time.sleep(self.config.test_delay)
 			else:
 				game_history = self.play_game(
 					self.config.visit_softmax_temperature_fn(
-						trained_steps=shared_storage.get_info
+						trained_steps=shared_storage.get_info.remote("training_step")
 					),
-					False,### if want to render, change this
+					False,### if you want to render, change this
 				)
 
 				replay_buffer.save_game.remote(game_history, shared_storage)
@@ -498,7 +476,7 @@ class SelfPlay:
 				'''
 				# Choose the action
 				legal_actions=self.game.legal_actions()
-				root, mcts_info = MCTS(self.config).run(self.predictor,observation,legal_actions,self.game.now_type)
+				root, mcts_info = MCTS(self.config).run(self,observation,legal_actions,self.game.now_type)
 				action = self.select_action(
 					root,
 					temperature

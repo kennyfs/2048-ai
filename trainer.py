@@ -7,7 +7,7 @@ import ray
 import tensorflow as tf
 
 import network
-import config
+import my_config
 def scale_gradient(tensor, scale):
 	"""Scales the gradient for the backward pass."""
 	return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
@@ -19,7 +19,7 @@ class Trainer:
 	in the shared storage.
 	"""
 
-	def __init__(self, initial_checkpoint, config:config.Config):
+	def __init__(self, initial_checkpoint, config:my_config.Config):
 		self.config = config
 		seed=config.seed
 		# Fix random generator seed
@@ -34,13 +34,13 @@ class Trainer:
 
 		# Initialize the optimizer
 		if self.config.optimizer == "SGD":
-			self.optimizer = tf.keras.optimizer.SGD(
-				learning_rate=self.config.lr_init,
+			self.optimizer = tf.keras.optimizers.SGD(
+				learning_rate=self.config.learning_rate_init,
 				momentum=self.config.momentum,
 			)
 		elif self.config.optimizer == "Adam":
-			self.optimizer = tf.keras.optimizer.Adam(
-				learning_rate=self.config.lr_init,
+			self.optimizer = tf.keras.optimizers.Adam(
+				learning_rate=self.config.learning_rate_init,
 			)
 		else:
 			raise NotImplementedError(
@@ -59,7 +59,7 @@ class Trainer:
 		):
 			index_batch, batch = ray.get(next_batch)
 			next_batch = replay_buffer.get_batch.remote()
-			self.update_lr()
+			self.update_learning_rate()
 			(
 				priorities,
 				total_loss,
@@ -76,7 +76,7 @@ class Trainer:
 			shared_storage.set_info.remote(
 				{
 					"training_step": self.training_step,
-					"lr": self.optimizer.learning_rate,
+					"learning_rate": self.optimizer.learning_rate,
 					"total_loss": total_loss,
 					"value_loss": value_loss,
 					"reward_loss": reward_loss,
@@ -188,8 +188,7 @@ class Trainer:
 						"weights": copy.deepcopy(self.model.get_weights())
 					}
 				)
-				if self.config.save_model:
-					shared_storage.save_checkpoint.remote()
+				shared_storage.save_checkpoint.remote()
 		return (
 			priorities,
 			# For log purpose
@@ -199,14 +198,14 @@ class Trainer:
 			policy_losses,
 		)
 
-	def update_lr(self):
+	def update_learning_rate(self):
 		"""
 		Update learning rate
 		"""
-		lr = self.config.lr_init * self.config.lr_decay_rate ** (
-			self.training_step / self.config.lr_decay_steps
+		learning_rate = self.config.learning_rate_init * self.config.learning_rate_decay_rate ** (
+			self.training_step / self.config.learning_rate_decay_steps
 		)
-		self.optimizer.learning_rate=lr
+		self.optimizer.learning_rate=learning_rate
 
 	@staticmethod
 	def loss_function(

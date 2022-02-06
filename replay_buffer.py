@@ -5,7 +5,7 @@ import numpy as np
 import ray
 import tensorflow as tf
 
-import config
+import my_config
 import network
 import self_play
 
@@ -16,7 +16,7 @@ class ReplayBuffer:
 	Class which run in a dedicated thread to store played games and generate batch.
 	"""
 
-	def __init__(self, initial_checkpoint, initial_buffer, config:config.Config):
+	def __init__(self, initial_checkpoint, initial_buffer, config:my_config.Config):
 		self.config = config
 		self.buffer = copy.deepcopy(initial_buffer)
 		self.num_played_games = initial_checkpoint["num_played_games"]
@@ -311,7 +311,6 @@ class Reanalyse:
 		# Initialize the network
 		self.model = network.Network(self.config)
 		self.model.set_weights(initial_checkpoint["weights"])
-		self.model.eval()
 
 		self.num_reanalysed_games = initial_checkpoint["num_reanalysed_games"]
 
@@ -331,7 +330,7 @@ class Reanalyse:
 			)
 
 			# Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
-			if self.config.use_last_model_value:
+			if self.config.reanalyse:
 				observations = [
 					game_history.get_stacked_observations(
 						i, self.config.stacked_observations
