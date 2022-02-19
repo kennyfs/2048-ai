@@ -70,15 +70,15 @@ class MuZero:
 		if self.config.max_num_gpus == 0 and (
 			self.config.selfplay_on_gpu
 			or self.config.train_on_gpu
-			or self.config.reanalyse_on_gpu
+			or self.config.reanalyze_on_gpu
 		):
 			raise ValueError(
-				"Inconsistent MuZeroConfig: max_num_gpus = 0 but GPU requested by selfplay_on_gpu or train_on_gpu or reanalyse_on_gpu."
+				"Inconsistent MuZeroConfig: max_num_gpus = 0 but GPU requested by selfplay_on_gpu or train_on_gpu or reanalyze_on_gpu."
 			)
 		if (
 			self.config.selfplay_on_gpu
 			or self.config.train_on_gpu
-			or self.config.reanalyse_on_gpu
+			or self.config.reanalyze_on_gpu
 		):
 			total_gpus = (
 				self.config.max_num_gpus
@@ -107,8 +107,7 @@ class MuZero:
 			"policy_loss": 0,
 			"num_played_games": 0,
 			"num_played_steps": 0,
-			"num_reanalysed_games": 0,
-			"terminate": False,
+			"num_reanalyzed_games": 0,
 		}
 		self.replay_buffer = {}
 		
@@ -117,9 +116,10 @@ class MuZero:
 		self.self_play_workers = None
 		self.test_worker = None
 		self.training_worker = None
-		self.reanalyse_worker = None
+		self.reanalyze_worker = None
 		self.replay_buffer_worker = None
 		self.shared_storage_worker = None
+		self.file_writer=tf.summary.create_file_writer(self.config.results_path)
 
 	def train(self, log_in_tensorboard=True):
 		"""
@@ -130,6 +130,9 @@ class MuZero:
 		"""
 		if log_in_tensorboard or self.config.save_model:
 			os.makedirs(self.config.results_path, exist_ok=True)
+		print(
+			"\nTraining...\nRun tensorboard --logdir ./results and go to http://localhost:6006/ to see in real time the training performance.\n"
+		)
 		'''
 		# Manage GPUs
 		if 0 < self.num_gpus:
@@ -137,7 +140,7 @@ class MuZero:
 				self.config.train_on_gpu
 				+ self.config.num_actors * self.config.selfplay_on_gpu
 				+ log_in_tensorboard * self.config.selfplay_on_gpu
-				+ self.config.reanalyse * self.config.reanalyse_on_gpu
+				+ self.config.reanalyze * self.config.reanalyze_on_gpu
 			)
 			if 1 < num_gpus_per_worker:
 				num_gpus_per_worker = math.floor(num_gpus_per_worker)
@@ -146,62 +149,62 @@ class MuZero:
 		'''
 		#I only have 1 gpu, I don't know the default ray uses, but I'll just not use .options to specify num_gpus
 		# Initialize workers
-		self.training_worker = trainer.Trainer.remote(self.checkpoint, self.config)
-
-		self.shared_storage_worker = shared_storage.SharedStorage.remote(self.checkpoint, self.config)
-		self.shared_storage_worker.set_info.remote("terminate", False)
-
-		self.replay_buffer_worker = replay_buffer.ReplayBuffer.remote(self.checkpoint, self.replay_buffer, self.config)
-
-		if self.config.reanalyse:
-			self.reanalyse_worker = replay_buffer.Reanalyse.remote(self.checkpoint, self.config)
 		model=network.Network(self.config)
 		manager=network.Manager(self.config,model)
 		predictor=network.Predictor(manager)
-		self.self_play_workers = [
-			self_play.SelfPlay.remote(predictor, self.Game, self.config, self.config.seed + seed)
-			for seed in range(self.config.num_actors)
-		]
+		self.training_worker = trainer.Trainer(self.checkpoint, model, self.config)
+
+		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
+
+		self.replay_buffer_worker = replay_buffer.ReplayBuffer.remote(self.checkpoint, self.replay_buffer, self.config)
+
+		if self.config.reanalyze:
+			self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, model, self.config)
+		self.self_play_worker = self_play.SelfPlay(predictor, self.Game, self.config, self.config.seed)
 
 		# Launch workers
-		[
-			self_play_worker.continuous_self_play.remote(
-				self.shared_storage_worker, self.replay_buffer_worker
-			)
-			for self_play_worker in self.self_play_workers
-		]
-		self.training_worker.continuous_update_weights.remote(
-			self.replay_buffer_worker, self.shared_storage_worker
-		)
-		if self.config.reanalyse:
-			self.reanalyse_worker.reanalyse.remote(
-				self.replay_buffer_worker, self.shared_storage_worker
-			)
-
+		counter=0
+		training_counter=0
+		try:
+			while 1:
+				self.self_play_worker.self_play(
+					self.replay_buffer_worker, self.shared_storage_worker
+				)
+				print('done playing')
+				self.training_worker.update_weights(
+					self.replay_buffer_worker, self.shared_storage_worker
+				)
+				print('done training')
+				self.reanalyze_worker.reanalyze.remote(
+					self.replay_buffer_worker, self.shared_storage_worker
+				)
+				print('done reanalyzing')
+				self.log_once(counter, training_counter)
+		except KeyboardInterrupt:
+			pass
+		# Persist replay buffer to disk
+		self.terminate()
+		'''
 		if log_in_tensorboard:
-			self.logging_loop()
+			self.log_once()'''
 
-	def logging_loop(self):
+	def log_once(self, counter, training_counter):
 		"""
 		Keep track of the training performance.
 		"""
-		# Launch the test worker to get performance metrics
-		self.test_worker = self_play.SelfPlay.remote(
+		# Play a test game each time it logs.
+		self.test_worker = self_play.SelfPlay(
 			self.checkpoint,
 			self.Game,
 			self.config,
 			self.config.seed + self.config.num_actors,
 		)
-		self.test_worker.continuous_self_play.remote(
-			self.shared_storage_worker, None, True
+		self.test_worker.self_play(
+			None, self.shared_storage_worker, True
 		)
-
-
-		print(
-			"\nTraining...\nRun tensorboard --logdir ./results and go to http://localhost:6006/ to see in real time the training performance.\n"
-		)
-		file_writer=tf.summary.create_file_writer(self.config.results_path)
-		with file_writer.as_default():
+		#"game_length", "total_reward", "stdev_reward" are set
+		
+		with self.file_writer.as_default():
 
 			# Save hyperparameters to TensorBoard
 			hp_table = [
@@ -225,86 +228,105 @@ class MuZero:
 				"stdev_reward",
 				#from trainer
 				"training_step",
-				"learning_rate",
+				#"learning_rate",
 				"total_loss",
 				"value_loss",
 				"reward_loss",
 				"policy_loss",
-				#from self_play_worker
+				#from self_play_worker, not too important
 				"num_played_games",
 				"num_played_steps",
-				"num_reanalysed_games",
+				"num_reanalyzed_games",
 			]
 			info = ray.get(self.shared_storage_worker.get_info.remote(keys))
-			try:
-				while info["training_step"] < self.config.training_steps:
-					info = ray.get(self.shared_storage_worker.get_info.remote(keys))
+			info = ray.get(self.shared_storage_worker.get_info.remote(keys))
+			tf.summary.scalar(
+				"1.Test_worker/1.Total_reward(Score)", info["total_reward"], counter,
+			)
+			tf.summary.scalar(
+				"1.Test_worker/3.game_length", info["game_length"], counter,
+			)
+			tf.summary.scalar(
+				"1.Test_worker/3.stdev_reward", info["stdev_reward"], counter,
+			)
+			tf.summary.scalar(
+				"2.Self_play_worker/1.num_played_games", info["num_played_games"], counter
+			)
+			tf.summary.scalar(
+				"2.Self_play_worker/2.num_played_steps", info["num_played_steps"], counter
+			)
+			tf.summary.scalar(
+				"2.Self_play_worker/3.num_reanalyzed_games", info["num_reanalyzed_games"], counter
+			)
+			log_training_config=1
+			if log_training_config==1:
+				#log all loss
+				for total_loss,value_loss,reward_loss,policy_loss in zip(info["total_loss"],info["value_loss"],info["reward_loss"],info["policy_loss"]):
+					#tf.summary.scalar(
+					#	"3.Trainer_worker/1.training_step", training_step, training_counter,
+					#)
+					#tf.summary.scalar(
+					#	"3.Trainer_worker/2.learning_rate", learning_rate, training_counter
+					#)
 					tf.summary.scalar(
-						"1.Test_worker/1.Total_reward(Score)", info["total_reward"], counter,
-					)
-					tf.summary.scalar(
-						"1.Test_worker/3.game_length", info["game_length"], counter,
-					)
-					tf.summary.scalar(
-						"1.Test_worker/3.stdev_reward", info["stdev_reward"], counter,
-					)
-					tf.summary.scalar(
-						"2.Self_play_worker/1.num_played_games", info["num_played_games"], counter
-					)
-					tf.summary.scalar(
-						"2.Self_play_worker/2.num_played_steps", info["num_played_steps"], counter
-					)
-					tf.summary.scalar(
-						"2.Self_play_worker/3.num_reanalysed_games", info["num_reanalysed_games"], counter
-					)
-					tf.summary.scalar(
-						"3.Trainer_worker/1.training_step", info["training_step"], counter,
-					)
-					tf.summary.scalar(
-						"3.Trainer_worker/2.learning_rate", info["learning_rate"], counter
-					)
-					tf.summary.scalar(
-						"3.Trainer_worker/3.total_loss", info["total_loss"], counter
-					)
-					tf.summary.scalar(
-						"3.Trainer_worker/4.value_loss", info["value_loss"], counter
-					)
-					tf.summary.scalar(
-						"3.Trainer_worker/5.reward_loss", info["reward_loss"], counter
+						"3.Trainer_worker/1.total_loss", total_loss, training_counter
 					)
 					tf.summary.scalar(
-						"3.Trainer_worker/6.policy_loss", info["policy_loss"], counter
+						"3.Trainer_worker/2.value_loss", value_loss, training_counter
 					)
-					print(
-						f'Last test score: {info["total_reward"]:6d}. Training step: {info["training_step"]}/{self.config.training_steps}. Played games: {info["num_played_games"]}. Loss: {info["total_loss"]:.3f}',
-						end="\r",
+					tf.summary.scalar(
+						"3.Trainer_worker/3.reward_loss", reward_loss, training_counter
 					)
-					counter += 1
-					time.sleep(self.config.log_delay)
-			except KeyboardInterrupt:#first Ctrl-C
-				pass
+					tf.summary.scalar(
+						"3.Trainer_worker/4.policy_loss", policy_loss, training_counter
+					)
+					training_counter+=1
+			elif log_training_config==2:
+				#log mean of loss
+				length=len(total_loss)
+				total_loss,value_loss,reward_loss,policy_loss=sum(info["total_loss"])/length,sum(info["value_loss"])/length,sum(info["reward_loss"])/length,sum(info["policy_loss"])/length#all are numpy array(size=())
+				tf.summary.scalar(
+					"3.Trainer_worker/1.training_step", info['training_step'], counter,
+				)
+				tf.summary.scalar(
+					"3.Trainer_worker/2.total_loss", total_loss, counter
+				)
+				tf.summary.scalar(
+					"3.Trainer_worker/3.value_loss", value_loss, counter
+				)
+				tf.summary.scalar(
+					"3.Trainer_worker/4.reward_loss", reward_loss, counter
+				)
+				tf.summary.scalar(
+					"3.Trainer_worker/5.policy_loss", policy_loss, counter
+				)
+			else:
+				raise NotImplementedError
+			print(
+				f'Last test score: {info["total_reward"]:6d}. Training step: {info["training_step"]}/{self.config.training_steps}. Played games: {info["num_played_games"]}. Loss: {info["total_loss"]:.3f}',
+				#end="\r",
+			)
+			counter += 1
 
-
-		# Persist replay buffer to disk
-		print("\n\nPersisting replay buffer games to disk...")
-		self.replay_buffer = ray.get(self.replay_buffer_worker.get_buffer.remote())
-		ray.get(self.shared_storage_worker.save.remote(self.replay_buffer))
-		self.terminate_workers()
-		print('done saving')
-	def terminate_workers(self):
+	def terminate(self):
 		"""
 		Softly terminate the running tasks and garbage collect the workers.
 		"""
-		self.shared_storage_worker.set_info.remote("terminate", True)
+
+		print("\n\nPersisting replay buffer games to disk...")
+		replay_buffer = ray.get(self.replay_buffer_worker.get_buffer.remote())
+		self.shared_storage_worker.save(replay_buffer)
 
 		print("\nShutting down workers...")
 
 		self.self_play_workers = None
 		self.test_worker = None
 		self.training_worker = None
-		self.reanalyse_worker = None
+		self.reanalyze_worker = None
 		self.replay_buffer_worker = None
 		self.shared_storage_worker = None
+
+		print('done saving')
 
 	def load_model(self, checkpoint_path=None, replay_buffer_path=None):
 		"""
@@ -338,7 +360,7 @@ class MuZero:
 				self.checkpoint["training_step"] = 0
 				self.checkpoint["num_played_steps"] = 0
 				self.checkpoint["num_played_games"] = 0
-				self.checkpoint["num_reanalysed_games"] = 0
+				self.checkpoint["num_reanalyzed_games"] = 0
 	def load_model_menu(self):
 		# Configure running options
 		options = sorted(glob.glob(f"results/*/"),reverse=True) + ["Specify paths manually"]
@@ -387,6 +409,7 @@ if __name__ == "__main__":
 
 		while True:
 			# Configure running options
+			'''
 			options = [
 				"Train",
 				"Load pretrained model",
@@ -403,6 +426,8 @@ if __name__ == "__main__":
 			while choice not in valid_inputs:
 				choice = input("Invalid input, enter a number listed above: ")
 			choice = int(choice)
+			'''
+			choice=0
 			if choice == 0:
 				muzero.train()
 			elif choice == 1:

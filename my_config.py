@@ -2,7 +2,7 @@ import numpy as np
 import os
 import datetime
 
-def default_visit_softmax_temperature(num_moves,training_steps):
+def default_visit_softmax_temperature(num_moves=0,training_steps=0):
 	if training_steps < 50e3:
 		return 1.0
 	elif training_steps < 75e3:
@@ -46,7 +46,7 @@ class Config:
 		self.if_add_exploration_noise=if_add_exploration_noise
 		self.root_dirichlet_alpha=dirichlet_alpha
 		self.root_exploration_fraction=0.25
-
+		self.observation_shape=(self.board_size**2,self.board_size,self.board_size)
 		# UCB formula
 		self.pb_c_base=19652
 		self.pb_c_init=1.25
@@ -81,7 +81,7 @@ class Config:
 		self.num_unroll_steps=10
 		self.optimizer='SGD'
 		self.value_loss_weight=0.5#See paper appendix H Reanalyze
-		self.steps_per_batch=1000
+		self.steps_per_batch=10
 		self.save_model=True
 		#count adding(type 1), but not count them as network training target
 		self.td_steps=td_steps
@@ -101,14 +101,22 @@ class Config:
 		self.PER_alpha=1
 
 		self.debug=False
-		self.reanalyse=True#Using latest model's predcition for value to improve quality of value target(Appendix H)
+		self.reanalyze=True#Using latest model's predcition for value to improve quality of value target(Appendix H)
 
 		#log
 		self.test_delay=0
 		self.log_delay=2.0
+
+
+		self.replay_buffer_size=1000
+		#overall hyperparameter
+		self.training_steps_to_selfplay_steps_ratio=0.3
+		self.reanalyze_steps_to_selfplay_games_ratio=0.2
+		self.selfplay_games_to_test_games_ratio=0.1
+		self.selfplay_games_per_run=5
 def default_config():
 	return Config(
-		max_moves=5,#it can be infinity because any 2048 game is bound to end
+		max_moves=1000000,#it can be infinity because any 2048 game is bound to end
 		discount=0.97,
 		search_threads=5,
 		model_max_threads=3000,

@@ -2,11 +2,6 @@ import copy
 import os
 import pickle
 
-import ray
-import tensorflow as tf
-
-
-@ray.remote
 class SharedStorage:
 	"""
 	Class which run in a dedicated thread to store the network weights and some information.
@@ -28,7 +23,7 @@ class SharedStorage:
 	#from self_play_worker
 	"num_played_games",
 	"num_played_steps",
-	"num_reanalysed_games",
+	"num_reanalyzed_games",
 
 	and weights from 
 	"""
@@ -40,7 +35,7 @@ class SharedStorage:
 	def save(self, replay_buffer=None):
 		#replay_buffer is replay_buffer.ReplayBuffer.buffer, a dict {num_played_games: game_history}
 		training_step = self.current_checkpoint['training_step']
-		path = os.path.join(self.config.results_path, f"model-{training_step:06d}.pkl")
+		path = os.path.join(self.config.results_path, f"info-{training_step:06d}.pkl")
 		with open(path,'wb') as F:
 			pickle.dump(self.current_checkpoint,F)
 		if replay_buffer:
@@ -50,8 +45,15 @@ class SharedStorage:
 		path = os.path.join(self.config.results_path, 'newest_training_step')
 		with open(path, 'w') as F:
 			F.write(f'{training_step:06d}')
+			
 	def get_checkpoint(self):
 		return copy.deepcopy(self.current_checkpoint)
+
+	def save_weights(self,weights):
+		training_step = self.current_checkpoint['training_step']
+		path = os.path.join(self.config.results_path, f"model-{training_step:06d}.pkl")
+		with open(path,'wb') as F:
+			pickle.dump(weights,F)
 
 	def get_info(self, keys):
 		if isinstance(keys, str):
@@ -68,3 +70,13 @@ class SharedStorage:
 			self.current_checkpoint.update(keys)
 		else:
 			raise TypeError
+
+	def clear_loss(self):
+		for key in "total_loss","value_loss","reward_loss","policy_loss":
+			self.current_checkpoint[key]=[]
+
+	def append_loss(self,total_loss,value_loss,reward_loss,policy_loss):
+		self.current_checkpoint['total_loss'].append(total_loss)
+		self.current_checkpoint['value_loss'].append(value_loss)
+		self.current_checkpoint['reward_loss'].append(reward_loss)
+		self.current_checkpoint['policy_loss'].append(policy_loss)

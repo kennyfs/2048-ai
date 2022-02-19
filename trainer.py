@@ -1,5 +1,4 @@
 import copy
-import random
 import time
 
 import numpy as np
@@ -12,24 +11,23 @@ def scale_gradient(tensor, scale):
 	"""Scales the gradient for the backward pass."""
 	return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
-@ray.remote
 class Trainer:
 	"""
 	Class which run in a dedicated thread to train a neural network and save it
 	in the shared storage.
 	"""
 
-	def __init__(self, initial_checkpoint, config:my_config.Config):
+	def __init__(self, initial_checkpoint, model:network.Network, config:my_config.Config):
 		self.config = config
 		seed=config.seed
 		# Fix random generator seed
 		np.random.seed(seed)
 		tf.random.set_seed(seed)
-
+		'''
 		# Initialize the network
 		self.model = network.Network(self.config)
 		self.model.set_weights(copy.deepcopy(initial_checkpoint["weights"]))
-
+		'''
 		self.training_step = initial_checkpoint["training_step"]
 
 		# Initialize the optimizer
@@ -47,16 +45,18 @@ class Trainer:
 				f"{self.config.optimizer} is not implemented. You can change the optimizer manually in trainer.py."
 			)
 
-	def continuous_update_weights(self, replay_buffer, shared_storage):
+	def update_weights(self, replay_buffer, shared_storage):
 		# Wait for the replay buffer to be filled
-		while ray.get(shared_storage.get_info.remote("num_played_games")) < 1:
-			time.sleep(5.0)
+		assert shared_storage.get_info("num_played_games") > 0, 'no enough games, get 0'
 
 		next_batch = replay_buffer.get_batch.remote()
 		# Training loop
-		while self.training_step < self.config.training_steps and not ray.get(
-			shared_storage.get_info.remote("terminate")
-		):
+		shared_storage.clear_loss()
+		while (self.training_step / max(
+				1, ray.get(shared_storage.get_info("num_played_steps")))
+				> self.config.training_steps_to_selfplay_steps_ratio
+				and
+				self.training_step < self.config.training_steps):
 			index_batch, batch = ray.get(next_batch)
 			next_batch = replay_buffer.get_batch.remote()
 			self.update_learning_rate()
@@ -73,31 +73,19 @@ class Trainer:
 				replay_buffer.update_priorities.remote(priorities, index_batch)
 
 			# Save to the shared storage
-			shared_storage.set_info.remote(
+			shared_storage.set_info(
 				{
 					"training_step": self.training_step,
-					"learning_rate": self.optimizer.learning_rate,
-					"total_loss": total_loss,
-					"value_loss": value_loss,
-					"reward_loss": reward_loss,
-					"policy_loss": policy_loss,
+					#"learning_rate": self.optimizer.learning_rate,
 				}
 			)
-
+			shared_storage.append_loss(total_loss,value_loss,reward_loss,policy_loss)
 			# Managing the self-play / training ratio
-			if self.config.training_delay:
-				time.sleep(self.config.training_delay)
-			if self.config.ratio:
-				while (
-					self.training_step
-					/ max(
-						1, ray.get(shared_storage.get_info.remote("num_played_steps"))
-					)
-					> self.config.ratio
-					and self.training_step < self.config.training_steps
-					and not ray.get(shared_storage.get_info.remote("terminate"))
-				):
-					time.sleep(0.5)
+		# loss log:
+		# clear losses saved in shared storage when training start. 
+		# train until training to selfplay steps ratio is up to the config.
+
+		# log has a long series of losses.
 	def update_weights(self, batch, shared_storage):
 		"""
 		Perform one training step.
@@ -170,32 +158,28 @@ class Trainer:
 				loss *= weight_batch
 			# (Deepmind's pseudocode do a sum, and werner-duvaud/muzero-general do a mean. Both are the same.) 
 			loss=tf.math.reduce_mean(loss)#now loss is a scalar
-			losses.append(loss.numpy())
-			value_losses.append(tf.math.reduce_mean(total_value_loss).numpy())
-			reward_losses.append(tf.math.reduce_mean(total_reward_loss).numpy())
-			policy_losses.append(tf.math.reduce_mean(total_policy_loss).numpy())
+			last_loss=loss.numpy()
+			last_value_loss=tf.math.reduce_mean(total_value_loss).numpy()
+			last_reward_loss=tf.math.reduce_mean(total_reward_loss).numpy()
+			last_policy_loss=tf.math.reduce_mean(total_policy_loss).numpy()
 			return loss
 
 		# Optimize
-		losses, value_losses, reward_losses, policy_losses=[[],[],[],[]]
+		last_loss,last_value_loss,last_reward_loss,last_policy_loss=[None]*4
 		for _ in range(self.config.steps_per_batch):
 			self.optimizer.minimize(loss_fn,self.model.trainable_variables)
 			self.training_step += 1
 
 			if self.training_step % self.config.checkpoint_interval == 0:
-				shared_storage.set_info.remote(
-					{
-						"weights": copy.deepcopy(self.model.get_weights())
-					}
-				)
-				shared_storage.save_checkpoint.remote()
+				shared_storage.save_weights(copy.deepcopy(self.model.get_weights()))
+				shared_storage.save()
 		return (
 			priorities,
 			# For log purpose
-			losses,
-			value_losses,
-			reward_losses,
-			policy_losses,
+			last_loss,
+			last_value_loss,
+			last_reward_loss,
+			last_policy_loss,
 		)
 
 	def update_learning_rate(self):

@@ -1,6 +1,6 @@
 import random
 import sys
-from copy import deepcopy
+import copy
 from random import randint
 from time import sleep
 
@@ -20,7 +20,7 @@ class Environment:
 		self.config=config
 		self.board_size=config.board_size
 		if board:#if it's not None
-			self.grid=deepcopy(board)
+			self.grid=copy.deepcopy(board)
 		else:
 			self.reset()
 		if score:
@@ -137,8 +137,8 @@ class Environment:
 		return self.add_pos_to_action(x,y,num)
 	def valid(self,action)->bool:
 		if 0<=action and action<=3:#### this needs optimizing
-			tmp=Environment(self.config,board=deepcopy(self.grid))
-			a=deepcopy(tmp.grid)
+			tmp=Environment(self.config,board=copy.deepcopy(self.grid))
+			a=copy.deepcopy(tmp.grid)
 			tmp.step(action)
 			for x in range(self.board_size):
 				for y in range(self.board_size):

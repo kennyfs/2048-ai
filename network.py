@@ -82,7 +82,10 @@ def scalar_to_support(x, support_size):####todo: implement
 	)
 	logits=tf.reshape(logits,(*original_shape,-1))
 	return logits
-
+def action_to_onehot(board_size, action):
+	ret=np.zeros((4+2*board_size**2),dtype=np.float32)
+	ret[action]=1
+	return ret
 NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state','value','policy'])
 
 												####shapes:###
@@ -131,7 +134,7 @@ class AbstractNetwork(ABC):
 	
 	def initial_inference(self, observation)->NetworkOutput:
 		'''
-		directly inference, for training and reanalyse
+		directly inference, for training and reanalyze
 		input shape: batch, channel, width, height
 		'''
 		assert len(observation.shape)==4
@@ -265,8 +268,8 @@ class FullyConnectedNetwork(AbstractNetwork):
 			
 	def representation(self,observation):
 		return scale_hidden_state(self.representation_model(observation))
-	def dynamics(self,hidden_state,action):
-		hidden_state,reward=self.dynamics_model(hidden_state,action)
+	def dynamics(self,inputs):
+		hidden_state,reward=self.dynamics_model(inputs)
 		hidden_state=scale_hidden_state(hidden_state)
 		return hidden_state,reward
 	def prediction(self,hidden_state):
@@ -346,7 +349,7 @@ class Manager:
 	def run_coroutine_list(self):
 		ret=self.loop.run_until_complete(asyncio.gather(*(self.coroutine_list)))
 		self.coroutine_list=[self.prediction_worker()]
-		return ret
+		return ret[1:]
 	def are_all_queues_empty(self):
 		for q in (self.representation_queue,self.dynamics_queue,self.prediction_queue):
 			if not q.empty():

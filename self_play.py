@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import copy
 import math
 import random
 import sys
@@ -15,7 +16,7 @@ KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
 class MinMaxStats():
 	"""A class that holds the min-max values of the tree."""
 
-	def __init__(self,known_bounds:KnownBounds):
+	def __init__(self,known_bounds:KnownBounds=None):
 		self.maximum=known_bounds.max if known_bounds else -MAXIMUM_FLOAT_VALUE
 		self.minimum=known_bounds.min if known_bounds else MAXIMUM_FLOAT_VALUE
 		#any update is accepted
@@ -45,10 +46,10 @@ class GameHistory:####
 		self.child_visits = []
 		self.root_values = []
 		self.length = 0
-		self.reanalysed_predicted_root_values = None
-		# For PER(not in my plan)
-		# self.priorities = None
-		# self.game_priority = None
+		self.reanalyzed_predicted_root_values = None
+		# For PER
+		self.priorities = None
+		self.game_priority = None
 
 	def store_search_statistics(self, root, action_space):
 		'''
@@ -126,14 +127,14 @@ class MCTS:
 	reach a leaf node.
 	"""
 
-	def __init__(self, config, predictor):
+	def __init__(self, config:my_config.Config, seed, predictor):
 		self.config = config
 		self.predictor=predictor
-		self.push_queue = predictor.push_queue
 		self.sem=asyncio.Semaphore(config.search_threads)
 		self.now_expanding=set()
 		self.expanded=set()
-	async def run(self,
+		self.seed=seed
+	def run(self,
 			observation, 
 			legal_actions,
 			now_type,#is for next action
@@ -151,8 +152,8 @@ class MCTS:
 		else:
 			#defaulted not to use previously searched nodes and create a new tree
 			root = Node(0)
-			output=await self.predictor.initial_inference(observation)
-			
+			self.predictor.manager.add_coroutine_list(self.predictor.initial_inference(observation))
+			output=self.predictor.manager.run_coroutine_list()[0]
 			root_predicted_value=output.value
 			reward=output.reward
 			policy_logits=output.policy
@@ -178,6 +179,7 @@ class MCTS:
 			root.add_exploration_noise(
 				dirichlet_alpha=self.config.root_dirichlet_alpha,
 				exploration_fraction=self.config.root_exploration_fraction,
+				seed=self.seed,
 			)
 
 		min_max_stats = MinMaxStats()
@@ -192,23 +194,14 @@ class MCTS:
 		return root, extra_info
 	async def tree_search(self, node, now_type, min_max_stats):#->int|None:
 		###Independent MCTS, run one simulation###
-		self.running_simulation_num += 1
 
 		# reduce parallel search number
-		with await self.sem:
-			if self.config.debug:
-				depth = await self.start_tree_search(node, now_type, min_max_stats)
-			else:
-				await self.start_tree_search(node, now_type, min_max_stats)
-			self.running_simulation_num -= 1
+		async with self.sem:
+			await self.start_tree_search(node, now_type, min_max_stats)
 
-		if self.config.debug:
-			return depth
 	async def start_tree_search(self, node, now_type, min_max_stats):#->int|None:
 		now_expanding = self.now_expanding
 
-		while node in now_expanding:
-			await asyncio.sleep(1e-4)
 		search_path=[node]
 		current_tree_depth = 0
 		#now_type is always the type of action to this node
@@ -217,32 +210,29 @@ class MCTS:
 			action, node = self.select_child(node, now_type, min_max_stats)
 			search_path.append(node)
 			now_type=1 if now_type==0 else 0
-			
+			while node in now_expanding:
+				await asyncio.sleep(1e-4)
+		self.now_expanding.add(node)
 		# Inside the search tree we use the dynamics function to obtain the next hidden
 		# state given an action and the previous hidden state
 		parent=search_path[-2]
 		output=await self.predictor.recurrent_inference(
 			parent.hidden_state,
-			np.array([action])
+			network.action_to_onehot(self.config.board_size,action)
 		)
 		if now_type==1:
-			actions=self.config.action_space_type1_size
-			output.policy=self.config.type1_p
+			actions=self.config.action_space_type1
 		else:
-			actions=self.config.action_space_type0_size
+			actions=self.config.action_space_type0
 		node.expand(
 			actions,
 			now_type,
 			output.reward,
-			output.policy,
+			output.policy if now_type==0 else self.config.type1_p,
 			output.hidden_state,
 		)
-
+		self.now_expanding.remove(node)
 		self.backpropagate(search_path, output.value, now_type, min_max_stats)
-
-		if self.config.debug:
-			return current_tree_depth
-
 		
 
 	def select_child(self, node, now_type, min_max_stats):
@@ -254,7 +244,12 @@ class MCTS:
 		if now_type==1:#this can be really randomly choosing one, or based on ucb.
 			#randomly
 			p=[child.prior for child in node.children.values()]
-			assert sum(p)==1
+			my_sum=sum(p)
+			if my_sum!=1:
+				p/=my_sum
+				for i,child in enumerate(node.children.values()):
+					child.prior=p[i]
+			assert abs(sum(p)-1)<1e-7,f'sum(p)={sum(p)}'
 			action=np.random.choice(list(node.children.keys()),p=p)
 		else:
 			ucb=[self.ucb_score(node, child, min_max_stats) for child in node.children.values()]
@@ -288,7 +283,7 @@ class MCTS:
 			value_score = min_max_stats.normalize(
 				child.reward
 				+ self.config.discount
-				* (child.value() if len(self.config.players) == 1 else -child.value())
+				* child.value()
 			)
 		else:
 			value_score = 0
@@ -347,126 +342,107 @@ class Node:
 		for action, p in policy.items():
 			self.children[action] = Node(p)
 
-	def add_exploration_noise(self, dirichlet_alpha, exploration_fraction):
+	def add_exploration_noise(self, dirichlet_alpha, exploration_fraction, seed):
 		"""
 		At the start of each search, we add dirichlet noise to the prior of the root to
 		encourage the search to explore new actions.
 		"""
 		actions = list(self.children.keys())
+		
+		np.random.seed(seed)
 		noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
 		frac = exploration_fraction
 		for a, n in zip(actions, noise):
 			self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
-@ray.remote
 class SelfPlay:
 	"""
 	Class which run in a dedicated thread to play games and save them to the replay-buffer.
 	"""
 
-	def __init__(self, predictor:network.Predictor, Game, config:my_config.Config, seed:int):
+	def __init__(self, predictor:network.Predictor, Game:type, config:my_config.Config, seed:int):
 		#have to pass seed because each self_play_worker should get different random seed to play different games
-		self.config = config
+		self.config = copy.deepcopy(config)
 		self.debug = config.debug
 		self.add_exploration_noise=config.if_add_exploration_noise
 		if seed==None:
 			seed=random.randrange(sys.maxsize)
 			if self.debug:
 				print(f'seed was set to be {seed}.')
-		self.game = Game(seed)
-
+		self.Game = Game
+		self.seed=seed
 		# Fix random generator seed
 		random.seed(seed)
-		np.random.seed(seed)
-		tf.random.set_seed(seed)
 
 		# Initialize the network
 		# should initialize manager, predictor at main.py, all selfplayer(self_play_worker*num_actors and test_worker*1)
 		self.predictor=predictor
-	def continuous_self_play(self, shared_storage, replay_buffer, test_mode=False):
-		while (ray.get(shared_storage.get_info.remote("training_step")) < self.config.training_steps
-				)and(
-				not ray.get(shared_storage.get_info.remote("terminate"))):
-			self.predictor.manager.set_weights(ray.get(shared_storage.get_info.remote("weights")))
+	def self_play(self, replay_buffer, shared_storage, test_mode=False):
+		if test_mode:
+			# Take the best action (no exploration) in test mode
+			# This is for log(to tensorboard), in order to see the progress
+			game_history = ray.get(self.play_game.remote(
+				self,
+				0,
+				False,
+			))
 
-			if test_mode:
-				# Take the best action (no exploration) in test mode
-				# This is for log(to tensorboard), in order to see the progress
-				game_history = self.play_game(
-					0,
-					False,
-				)
+			# Save to the shared storage
+			shared_storage.set_info(
+				{
+					"game_length": len(game_history.action_history) - 1,#first history is initial state
+					"total_reward": sum(game_history.reward_history),#final score in case of 2048
+					"stdev_reward": np.std(game_history.reward_history),
+				}
+			)
+			return
+		total=0
+		while total<self.config.selfplay_games_per_run:
+			#self.predictor.manager.set_weights(ray.get(shared_storage.get_info("weights")))
 
-				# Save to the shared storage
-				shared_storage.set_info.remote(
-					{
-						"game_length": len(game_history.action_history) - 1,#first history is initial state
-						"total_reward": sum(game_history.reward_history),#final score in case of 2048
-						"stdev_reward": np.std(game_history.reward_history),
-					}
-				)
-				time.sleep(self.config.test_delay)
-			else:
-				game_history = self.play_game(
-					self.config.visit_softmax_temperature_fn(
-						trained_steps=shared_storage.get_info.remote("training_step")
-					),
-					False,### if you want to render, change this
-				)
-
-				replay_buffer.save_game.remote(game_history, shared_storage)
-				
-
-			# Managing the self-play / training ratio
-			if not test_mode and self.config.self_play_delay:
-				time.sleep(self.config.self_play_delay)
-			if not test_mode and self.config.ratio:
-				while (
-					shared_storage.get_info.remote("training_step") / max(
-						1, shared_storage.get_info.remote("num_played_steps")
-					) < self.config.ratio####
-					and 
-					shared_storage.get_info.remote("training_step")
-					< self.config.training_steps
-					and 
-					not shared_storage.get_info.remote("terminate")
-				):
-					time.sleep(0.5)
-
-		self.close_game()
-
-	def play_game(self, temperature, render):
+			game_history=self.play_game(
+				self.config.visit_softmax_temperature_fn(
+					training_steps=shared_storage.get_info("training_step")
+				),
+				False,### if you want to render, change this
+			)
+			ray.get(replay_buffer.save_game.remote(game_history, shared_storage))
+			total+=1
+	
+	def play_game(self, temperature, render, game_id:int=-5):#for this single game, seed should be self.seed+game_id
 		"""
 		Play one game with actions based on the Monte Carlo tree search at each moves.
 		"""
 		game_history = GameHistory()
 		# start a whole new game
-		self.game.reset()
-		#self.game should keep now_type
-		observation = self.game.get_features()
-		#initial position #### I'm not sure whether or not I should keep this
-		game_history.add(None,observation,None,None)
+		self.config.seed=self.seed+game_id
+		game=self.Game(self.config)
+		game.reset()
+		#game should keep now_type
+		observation = game.get_features()
+		#initial position
+		game_history.add(None,observation,0,None)
 		#training target can be started at a time where the next move is adding move, so keep all observation history
 
 		for _ in range(2):
-			action=self.game.add()
-			observation=self.game.get_features()
-			game_history.add(action,observation,None,1)
+			action=game.add()
+			observation=game.get_features()
+			game_history.add(action,observation,0,1)
 		for _ in range(3):
-			game_history.root_values.append(None)
+			game_history.root_values.append(0)
 			game_history.child_visits.append(None)
 		done = False
 
 		if render:
 			print('A new game just started.')
-			self.game.render()
-		assert self.game.now_type==0
+			game.render()
+		assert game.now_type==0
 		while not done and len(game_history.action_history) <= self.config.max_moves:
-			if self.game.now_type==0:
+			if game.now_type==0:
 				assert (
 					len(np.array(observation).shape) == 3
 				), f"Observation should be 3 dimensionnal instead of {len(np.array(observation).shape)} dimensionnal. Got observation of shape: {np.array(observation).shape}"
 				assert (
-					np.array(observation).shape == self.config.observation_shape
+					observation.shape == self.config.observation_shape
 				), f"Observation should match the observation_shape defined in MuZeroConfig. Expected {self.config.observation_shape} but got {np.array(observation).shape}."
 				'''#This will only be useful if 
 				stacked_observations = game_history.get_stacked_observations(
@@ -475,11 +451,17 @@ class SelfPlay:
 				)
 				'''
 				# Choose the action
-				legal_actions=self.game.legal_actions()
-				root, mcts_info = MCTS(self.config).run(self,observation,legal_actions,self.game.now_type)
+				legal_actions=game.legal_actions()
+				root, mcts_info = MCTS(self.config, self.seed+game_id, self.predictor).run(
+					observation,
+					legal_actions,
+					game.now_type,
+					True,
+				)
 				action = self.select_action(
 					root,
-					temperature
+					temperature,
+					game_id,
 				)
 
 				if render:
@@ -487,35 +469,38 @@ class SelfPlay:
 					print(
 						f"Root value : {root.value():.2f}"
 					)
-				reward = self.game.step(action)#type changed here
-				done=self.game.finish()
-				observation=self.game.get_features()
+				reward = game.step(action)#type changed here
+				observation=game.get_features()
 				if render:
-					print(f"Played action: {self.game.action_to_string(action)}")
-					self.game.render()
+					print(f"Played action: {game.action_to_string(action)}")
+					game.render()
 
 				game_history.store_search_statistics(root, self.config.action_space_type0)
 
 				# Next batch
 				game_history.add(action,observation,reward,0)
 			else:
-				action=self.game.add()
-				self.game.change_type()
-				observation=self.game.get_features()
-				game_history.add(action,observation,None,1)
+				action=game.add()
+				game.change_type()
+				observation=game.get_features()
+				game_history.add(action,observation,0,1)
+				game_history.root_values.append(0)
+				game_history.child_visits.append(None)
+			done=game.finish()
+			print(len(game_history.root_values))
 		return game_history
 
 	def close_game(self):
 		self.game.close()
 
-	@staticmethod
-	def select_action(node, temperature):
+	def select_action(self, node, temperature, game_id:int=-5):
 		"""
 		Select action according to the visit count distribution and the temperature.
 		The temperature is changed dynamically with the visit_softmax_temperature function
 		in the config.
 		this function always choose from actions with type==0
 		"""
+		np.random.seed(self.seed+game_id)
 		visit_counts = np.array(
 			[child.visit_count for child in node.children.values()], dtype="int32"
 		)

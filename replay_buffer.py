@@ -62,8 +62,8 @@ class ReplayBuffer:
 			del self.buffer[del_id]
 
 		if shared_storage:
-			shared_storage.set_info.remote("num_played_games", self.num_played_games)
-			shared_storage.set_info.remote("num_played_steps", self.num_played_steps)
+			shared_storage.set_info("num_played_games", self.num_played_games)
+			shared_storage.set_info("num_played_steps", self.num_played_steps)
 		if self.config.save_game_to_file:
 			game_history.save(f'saved_games/{self.num_played_games}.record')
 	def load_games(self, first_game_id, length):
@@ -228,8 +228,8 @@ class ReplayBuffer:
 		if bootstrap_index < len(game_history.root_values):
 			root_values = (
 				game_history.root_values
-				if game_history.reanalysed_predicted_root_values is None
-				else game_history.reanalysed_predicted_root_values
+				if game_history.reanalyzed_predicted_root_values is None
+				else game_history.reanalyzed_predicted_root_values
 			)
 			last_step_value = root_values[bootstrap_index]
 
@@ -293,15 +293,13 @@ class ReplayBuffer:
 
 		return target_values, target_rewards, target_policies, actions
 
-
-@ray.remote
-class Reanalyse:
+class Reanalyze:
 	"""
 	Class which run in a dedicated thread to update the replay buffer with fresh information.
-	See paper appendix Reanalyse.
+	See paper appendix Reanalyze.
 	"""
 
-	def __init__(self, initial_checkpoint, config):
+	def __init__(self, initial_checkpoint, model:network.Network, config:my_config.Config):
 		self.config = config
 
 		# Fix random generator seed
@@ -309,43 +307,34 @@ class Reanalyse:
 		tf.random.set_seed(self.config.seed)
 
 		# Initialize the network
-		self.model = network.Network(self.config)
-		self.model.set_weights(initial_checkpoint["weights"])
+		self.model = model
 
-		self.num_reanalysed_games = initial_checkpoint["num_reanalysed_games"]
+		self.num_reanalyzed_games = initial_checkpoint["num_reanalyzed_games"]
 
-	def reanalyse(self, replay_buffer, shared_storage):
-		while ray.get(shared_storage.get_info.remote("num_played_games")) < 1:
-			time.sleep(0.1)
+	def reanalyze(self, replay_buffer, shared_storage):
+		if self.config.reanalyze:
+			while (self.num_reanalyzed_games / max(1,shared_storage.get_info('num_played_games'))
+				< self.config.selfplay_steps_to_reanalyze_steps_ratio):
 
-		while ray.get(
-			shared_storage.get_info.remote("training_step")
-		) < self.config.training_steps and not ray.get(
-			shared_storage.get_info.remote("terminate")
-		):
-			self.model.set_weights(ray.get(shared_storage.get_info.remote("weights")))
+				game_id, game_history, _ = ray.get(
+					replay_buffer.sample_game.remote(force_uniform=True)
+				)
 
-			game_id, game_history, _ = ray.get(
-				replay_buffer.sample_game.remote(force_uniform=True)
-			)
-
-			# Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
-			if self.config.reanalyse:
+				# Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
+				
 				observations = [
-					game_history.get_stacked_observations(
-						i, self.config.stacked_observations
-					)
+					game_history.get_observation(i)
 					for i in range(len(game_history.root_values))
 				]
 				observations=np.array(observations,dtype=np.float32)
 				values = network.support_to_scalar(
 					self.model.initial_inference(observations)['value'],
-					self.config.support_size,
+					self.config.support,
 				)
-				game_history.reanalysed_predicted_root_values =	tf.squeeze(values).numpy()
+				game_history.reanalyzed_predicted_root_values =	tf.squeeze(values).numpy()
 
-			replay_buffer.update_game_history.remote(game_id, game_history)
-			self.num_reanalysed_games += 1
-			shared_storage.set_info.remote(
-				"num_reanalysed_games", self.num_reanalysed_games
-			)
+				replay_buffer.update_game_history.remote(game_id, game_history)
+				self.num_reanalyzed_games += 1
+				shared_storage.set_info(
+					"num_reanalyzed_games", self.num_reanalyzed_games
+				)
