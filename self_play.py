@@ -2,6 +2,7 @@ import asyncio
 import collections
 import copy
 import math
+import environment
 import random
 import sys
 import time
@@ -113,12 +114,46 @@ class GameHistory:####
 		with open(file,'w') as F:
 			for action,reward,type,visits,value in zip(self.action_history,self.reward_history,self.type_history,self.child_visits,self.root_values):
 				F.write(f'{action} {reward} {type} {visits} {value}\n')
+	def load(self, file, config):
+		#about 60 times per second
+		env=environment.Environment(config)
+		with open(file,'r') as F:
+			for line in F.readlines():
+				last_index=0
+				index=line.find(' ',last_index)
+				self.action_history.append(eval(line[last_index:index]))
+				reward=None
+				if self.action_history[-1]!=None:
+					reward=env.step(self.action_history[-1])
+				self.observation_history.append(env.get_features())
+				last_index=index+1
+				index=line.find(' ',last_index)
+				self.reward_history.append(eval(line[last_index:index]))
+				if reward!=None:
+					assert reward==self.reward_history[-1],f'{reward}!={self.reward_history[-1]}'
+				last_index=index+1
+				index=line.find(' ',last_index)
+				self.type_history.append(eval(line[last_index:index]))
+				last_index=index+1
+				if line[last_index]=='[':
+					index=line.find(']',last_index)+1
+					self.child_visits.append(eval(line[last_index:index]))
+				elif line[last_index]=='N':
+					index=line.find(' ',last_index)
+					self.child_visits.append(eval(line[last_index:index]))
+				else:
+					raise BaseException(f'get illegal first word:\'{line[last_index]}\'')
+				last_index=index+1
+				self.root_values.append(eval(line[last_index:]))
+		self.length=len(self.root_values)
 	def add(self, action, observation, reward, _type):
 		self.action_history.append(action)
 		self.observation_history.append(observation)
 		self.reward_history.append(reward)
 		self.type_history.append(_type)
 		self.length+=1
+	def __str__(self):
+		return f'observation:\n{self.observation_history}\n\naction:\n{self.action_history}\n\nreward:\n{self.reward_history}\n\nchild_visits:\n{self.child_visits}\n\nvalue:\n{self.root_values}'
 class MCTS:
 	"""
 	Core Monte Carlo Tree Search algorithm.
@@ -376,15 +411,15 @@ class SelfPlay:
 		# Initialize the network
 		# should initialize manager, predictor at main.py, all selfplayer(self_play_worker*num_actors and test_worker*1)
 		self.predictor=predictor
+
 	def self_play(self, replay_buffer, shared_storage, test_mode=False):
 		if test_mode:
 			# Take the best action (no exploration) in test mode
 			# This is for log(to tensorboard), in order to see the progress
-			game_history = ray.get(self.play_game.remote(
-				self,
+			game_history = self.play_game(
 				0,
-				False,
-			))
+				True,
+			)
 
 			# Save to the shared storage
 			shared_storage.set_info(
@@ -403,9 +438,9 @@ class SelfPlay:
 				self.config.visit_softmax_temperature_fn(
 					training_steps=shared_storage.get_info("training_step")
 				),
-				False,### if you want to render, change this
+				True,### if you want to render, change this
 			)
-			ray.get(replay_buffer.save_game.remote(game_history, shared_storage))
+			ray.get(replay_buffer.save_game.remote(game_history))
 			total+=1
 	
 	def play_game(self, temperature, render, game_id:int=-5):#for this single game, seed should be self.seed+game_id
@@ -465,7 +500,7 @@ class SelfPlay:
 				)
 
 				if render:
-					print(f'Tree depth: {mcts_info["max_tree_depth"]}')
+					#print(f'Tree depth: {mcts_info["max_tree_depth"]}')
 					print(
 						f"Root value : {root.value():.2f}"
 					)

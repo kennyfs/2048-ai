@@ -23,6 +23,7 @@ class Trainer:
 		# Fix random generator seed
 		np.random.seed(seed)
 		tf.random.set_seed(seed)
+		self.model=model
 		'''
 		# Initialize the network
 		self.model = network.Network(self.config)
@@ -45,7 +46,7 @@ class Trainer:
 				f"{self.config.optimizer} is not implemented. You can change the optimizer manually in trainer.py."
 			)
 
-	def update_weights(self, replay_buffer, shared_storage):
+	def run_update_weights(self, replay_buffer, shared_storage):
 		# Wait for the replay buffer to be filled
 		assert shared_storage.get_info("num_played_games") > 0, 'no enough games, get 0'
 
@@ -53,8 +54,8 @@ class Trainer:
 		# Training loop
 		shared_storage.clear_loss()
 		while (self.training_step / max(
-				1, ray.get(shared_storage.get_info("num_played_steps")))
-				> self.config.training_steps_to_selfplay_steps_ratio
+				1, shared_storage.get_info("num_played_steps"))
+				< self.config.training_steps_to_selfplay_steps_ratio
 				and
 				self.training_step < self.config.training_steps):
 			index_batch, batch = ray.get(next_batch)
@@ -97,10 +98,10 @@ class Trainer:
 			target_reward_batch,
 			target_policy_batch,
 			weight_batch,
-		) = batch
+		) = batch#batches are all np.array
 		batchsize=action_batch.shape[0]
 		# Keep values as scalars for calculating the priorities for the prioritized replay
-		target_value_scalar = np.array(target_value_batch, dtype="float32")
+		target_value_scalar = np.copy(target_value_batch)
 		priorities = np.zeros_like(target_value_scalar)
 
 		# observation_batch: batch, channels, height, width
@@ -114,6 +115,7 @@ class Trainer:
 		# target_reward: batch, num_unroll_steps+1, 2*support_size+1
 
 		## Generate predictions
+		last_loss,last_value_loss,last_reward_loss,last_policy_loss=[None]*4
 		def loss_fn():
 			value, reward, policy_logits, hidden_state = self.model.initial_inference(
 				observation_batch
@@ -165,7 +167,6 @@ class Trainer:
 			return loss
 
 		# Optimize
-		last_loss,last_value_loss,last_reward_loss,last_policy_loss=[None]*4
 		for _ in range(self.config.steps_per_batch):
 			self.optimizer.minimize(loss_fn,self.model.trainable_variables)
 			self.training_step += 1

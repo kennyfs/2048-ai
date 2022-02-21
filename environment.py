@@ -73,7 +73,7 @@ class Environment:
 		output: instant reward
 		'''
 		beforescore=self.score
-		assert (0<=action<4 and self.now_type==0) or (action>=4 and self.now_type==1), f'get action {action}, but now_type is {self.now_type}.'
+		#assert (0<=action<4 and self.now_type==0) or (action>=4 and self.now_type==1), f'get action {action}, but now_type is {self.now_type}.'
 		self.change_type()
 		if action==0:
 			for i in range(self.board_size):

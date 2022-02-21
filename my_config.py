@@ -91,8 +91,8 @@ class Config:
 
 		#Exponential learning rate schedule
 		self.learning_rate_init=lr_init
-		self.lr_decay_rate=0.1
-		self.lr_decay_steps=lr_decay_steps
+		self.learning_rate_decay_rate=0.9
+		self.learning_rate_decay_steps=lr_decay_steps
 
 		self.save_game_to_file=save_game_to_file
 		self.seed=None
@@ -127,6 +127,6 @@ def default_config():
 		batch_size=1024,
 		td_steps=10,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
 		num_actors=5,
-		lr_init=0.1,
+		lr_init=0.01,
 		lr_decay_steps=35e3,
 		visit_softmax_temperature_fn=default_visit_softmax_temperature)

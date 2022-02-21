@@ -31,7 +31,7 @@ class ReplayBuffer:
 		# Fix random generator seed
 		np.random.seed(self.config.seed)
 
-	def save_game(self, game_history, shared_storage=None):
+	def save_game(self, game_history, save_to_file=True):
 		if self.config.PER:
 			if game_history.priorities is not None:
 				# Avoid read only array when loading replay buffer from disk
@@ -61,24 +61,22 @@ class ReplayBuffer:
 			self.total_samples -= self.buffer[del_id].length
 			del self.buffer[del_id]
 
-		if shared_storage:
-			shared_storage.set_info("num_played_games", self.num_played_games)
-			shared_storage.set_info("num_played_steps", self.num_played_steps)
-		if self.config.save_game_to_file:
+		if self.config.save_game_to_file and save_to_file:
 			game_history.save(f'saved_games/{self.num_played_games}.record')
+	def get_info(self):
+		return {"num_played_games":self.num_played_games,"num_played_steps":self.num_played_steps}
 	def load_games(self, first_game_id, length):
 		for i in range(first_game_id, first_game_id+length):
 			game_history=self_play.GameHistory()
-			game_history.load(f'saved_games/{i}.record')#not implemented yet
-			self.buffer[i]=game_history
-			self.num_played_games += 1
-			self.num_played_steps += game_history.length
-			self.total_samples += game_history.length
+			game_history.load(f'saved_games/{i}.record',self.config)
+			self.save_game(game_history, save_to_file=False)
 	def get_buffer(self):
 		return self.buffer
-
+	def get_num_played_games(self):
+		return self.num_played_games
 	def get_batch(self):
 		#samples always start from state followed by actions of type 0 (move)
+		#return type: np.array
 		(
 			index_batch,
 			observation_batch,
@@ -86,7 +84,7 @@ class ReplayBuffer:
 			reward_batch,
 			value_batch,
 			policy_batch,
-		) = ([], [], [], [], [], [], [])
+		) = ([], [], [], [], [], [])
 		weight_batch = [] if self.config.PER else None
 
 		for game_id, game_history, game_prob in self.sample_n_games(self.config.batch_size):
@@ -102,6 +100,8 @@ class ReplayBuffer:
 			)
 			action_batch.append(actions)
 			value_batch.append(values)
+			if len(values)!=5:
+				print(f'len:{len(values)}\n id={game_id}/{game_pos}')
 			reward_batch.append(rewards)
 			policy_batch.append(policies)
 			if self.config.PER:
@@ -122,12 +122,12 @@ class ReplayBuffer:
 		return (
 			index_batch,
 			(
-				observation_batch,
-				action_batch,
-				value_batch,
-				reward_batch,
-				policy_batch,
-				weight_batch,
+				np.array(observation_batch,dtype=np.float32),
+				np.array(action_batch,dtype=np.float32),
+				np.array(value_batch,dtype=np.float32),
+				np.array(reward_batch,dtype=np.float32),
+				np.array(policy_batch,dtype=np.float32),
+				np.array(weight_batch,dtype=np.float32),
 			),
 		)
 
@@ -140,7 +140,7 @@ class ReplayBuffer:
 		if self.config.PER and not force_uniform:
 			game_probs = np.array(
 				[game_history.game_priority for game_history in self.buffer.values()],
-				dtype="float32",
+				dtype=np.float32,
 			)
 			game_probs /= np.sum(game_probs)
 			game_index = np.random.choice(len(self.buffer), p=game_probs)
@@ -225,7 +225,7 @@ class ReplayBuffer:
 		# The value target is the discounted root value of the search tree td_steps into the
 		# future, plus the discounted sum of all rewards until then.
 		bootstrap_index = index + self.config.td_steps
-		if bootstrap_index < len(game_history.root_values):
+		if bootstrap_index < game_history.length:
 			root_values = (
 				game_history.root_values
 				if game_history.reanalyzed_predicted_root_values is None
@@ -257,17 +257,16 @@ class ReplayBuffer:
 		for current_index in range(
 			state_index, state_index + self.config.num_unroll_steps + 1
 		): 
-			if game_history.type_history[current_index]==1:
+			if current_index < game_history.length and game_history.type_history[current_index]==1:
 				append_none(game_history.action_history[current_index])
 				continue
 			value = self.compute_target_value(game_history, current_index)
-
-			if current_index < len(game_history.root_values):
+			if current_index < game_history.length-1:
 				target_values.append(value)
 				target_rewards.append(game_history.reward_history[current_index])
 				target_policies.append(game_history.child_visits[current_index])
 				actions.append(game_history.action_history[current_index])#actions[0] is not used, so trainer.update_weights start recurrent inference from actions[1]
-			elif current_index == len(game_history.root_values):
+			elif current_index == game_history.length-1:
 				target_values.append(0)
 				target_rewards.append(game_history.reward_history[current_index])
 				# Uniform policy
@@ -279,19 +278,23 @@ class ReplayBuffer:
 				)
 				actions.append(game_history.action_history[current_index])
 			else:
-				# States past the end of games are treated as absorbing states
-				target_values.append(0)
-				target_rewards.append(0)
-				# Uniform policy
-				target_policies.append(
-					[
-						1 / len(game_history.child_visits[0])
-						for _ in range(len(game_history.child_visits[0]))
-					]
-				)
+				if current_index%2==1:
+					# States past the end of games are treated as absorbing states
+					target_values.append(0)
+					target_rewards.append(0)
+					# Uniform policy
+					target_policies.append(
+						[
+							1 / len(self.config.action_space_type0)
+							for _ in self.config.action_space_type0
+						]
+					)
 				actions.append(np.random.choice(self.config.action_space_type0))
 
-		return target_values, target_rewards, target_policies, actions
+		return 	(np.array(target_values,dtype=np.float32),
+				np.array(target_rewards,dtype=np.float32),
+				np.array(target_policies,dtype=np.float32),
+				np.array(actions,dtype=np.float32))
 
 class Reanalyze:
 	"""
@@ -314,7 +317,7 @@ class Reanalyze:
 	def reanalyze(self, replay_buffer, shared_storage):
 		if self.config.reanalyze:
 			while (self.num_reanalyzed_games / max(1,shared_storage.get_info('num_played_games'))
-				< self.config.selfplay_steps_to_reanalyze_steps_ratio):
+				< self.config.reanalyze_steps_to_selfplay_games_ratio):
 
 				game_id, game_history, _ = ray.get(
 					replay_buffer.sample_game.remote(force_uniform=True)
@@ -328,7 +331,7 @@ class Reanalyze:
 				]
 				observations=np.array(observations,dtype=np.float32)
 				values = network.support_to_scalar(
-					self.model.initial_inference(observations)['value'],
+					self.model.initial_inference(observations).value,
 					self.config.support,
 				)
 				game_history.reanalyzed_predicted_root_values =	tf.squeeze(values).numpy()
