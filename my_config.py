@@ -63,15 +63,16 @@ class Config:
 		#this = 0 means not using support
 		
 		# Fully Connected Network
-		self.hidden_state_size=32
-		self.representation_size=[32,32,32]# Define the hidden layers in the representation network
-		self.dynamics_size=[32,32]# Define the hidden layers in the common parts of the dynamics network
-		self.dynamics_hidden_state_head_size=[32]# Define the hidden layers in hidden state head of the dynamics network
-		self.dynamics_reward_head_size=[32]# Define the hidden layers in reward head of the dynamics network
-		self.prediction_size=[32,32]# Define the hidden layers in the common parts of the prediction network
-		self.prediction_value_head_size=[32]# Define the hidden layers in value head of the prediction network
-		self.prediction_policy_head_size=[32]# Define the hidden layers in policy head of the prediction network
-		
+		self.hidden_state_size=64
+		self.representation_size=[128,64,32]# Define the hidden layers in the representation network
+		self.dynamics_size=[128,128,128]# Define the hidden layers in the common parts of the dynamics network
+		self.dynamics_hidden_state_head_size=[128,128]# Define the hidden layers in hidden state head of the dynamics network
+		self.dynamics_reward_head_size=[64,64]# Define the hidden layers in reward head of the dynamics network
+		self.prediction_size=[128,84,64]# Define the hidden layers in the common parts of the prediction network
+		self.prediction_value_head_size=[64,64]# Define the hidden layers in value head of the prediction network
+		self.prediction_policy_head_size=[64,64]# Define the hidden layers in policy head of the prediction network
+		#Fully Connected Network doesn't work well
+
 		### Training
 		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
 		self.training_steps=int(100e3)
@@ -110,10 +111,10 @@ class Config:
 
 		self.replay_buffer_size=1000
 		#overall hyperparameter
-		self.training_steps_to_selfplay_steps_ratio=0.3
-		self.reanalyze_steps_to_selfplay_games_ratio=0.2
+		self.training_steps_to_selfplay_steps_ratio=0.2
+		self.reanalyze_games_to_selfplay_games_ratio=0.8
 		self.selfplay_games_to_test_games_ratio=0.1
-		self.selfplay_games_per_run=5
+		self.selfplay_games_per_run=10
 def default_config():
 	return Config(
 		max_moves=1000000,#it can be infinity because any 2048 game is bound to end
@@ -125,7 +126,8 @@ def default_config():
 		num_simulations=100,
 		board_size=4,
 		batch_size=1024,
-		td_steps=10,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
+		td_steps=30,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
+		#2048 games tend to be very long
 		num_actors=5,
 		lr_init=0.01,
 		lr_decay_steps=35e3,

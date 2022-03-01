@@ -72,8 +72,6 @@ class ReplayBuffer:
 			self.save_game(game_history, save_to_file=False)
 	def get_buffer(self):
 		return self.buffer
-	def get_num_played_games(self):
-		return self.num_played_games
 	def get_batch(self):
 		#samples always start from state followed by actions of type 0 (move)
 		#return type: np.array
@@ -100,8 +98,6 @@ class ReplayBuffer:
 			)
 			action_batch.append(actions)
 			value_batch.append(values)
-			if len(values)!=5:
-				print(f'len:{len(values)}\n id={game_id}/{game_pos}')
 			reward_batch.append(rewards)
 			policy_batch.append(policies)
 			if self.config.PER:
@@ -184,7 +180,6 @@ class ReplayBuffer:
 		while position_index+1<game_history.length and game_history.type_history[position_index+1]!=0:
 			position_index+=1
 		if position_index+1==game_history.length:#this could never happen because the last action must be type 0
-			print('something weird happened... see replay_buffer.ReplayBuffer.sample_position')
 			return self.sample_position(game_history, force_uniform)
 		return position_index, position_prob
 
@@ -255,8 +250,8 @@ class ReplayBuffer:
 		def append_none(action):
 			actions.append(action)
 		for current_index in range(
-			state_index, state_index + self.config.num_unroll_steps + 1
-		): 
+			state_index+1, state_index + self.config.num_unroll_steps + 1
+		):
 			if current_index < game_history.length and game_history.type_history[current_index]==1:
 				append_none(game_history.action_history[current_index])
 				continue
@@ -317,7 +312,7 @@ class Reanalyze:
 	def reanalyze(self, replay_buffer, shared_storage):
 		if self.config.reanalyze:
 			while (self.num_reanalyzed_games / max(1,shared_storage.get_info('num_played_games'))
-				< self.config.reanalyze_steps_to_selfplay_games_ratio):
+				< self.config.reanalyze_games_to_selfplay_games_ratio):
 
 				game_id, game_history, _ = ray.get(
 					replay_buffer.sample_game.remote(force_uniform=True)

@@ -32,7 +32,7 @@ class SharedStorage:
 		self.config = config
 		self.current_checkpoint = copy.deepcopy(checkpoint)
 
-	def save(self, replay_buffer=None):
+	def save(self, replay_buffer=None, model=None):
 		#replay_buffer is replay_buffer.ReplayBuffer.buffer, a dict {num_played_games: game_history}
 		training_step = self.current_checkpoint['training_step']
 		path = os.path.join(self.config.results_path, f"info-{training_step:06d}.pkl")
@@ -42,6 +42,8 @@ class SharedStorage:
 			path = os.path.join(self.config.results_path, f"replay_buffer-{training_step:06d}.pkl")
 			with open(path,'wb') as F:
 				pickle.dump(replay_buffer,F)
+		if model:
+			self.save_weights(copy.deepcopy(model.get_weights()))
 		path = os.path.join(self.config.results_path, 'newest_training_step')
 		with open(path, 'w') as F:
 			F.write(f'{training_step:06d}')

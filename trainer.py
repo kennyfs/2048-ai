@@ -111,29 +111,44 @@ class Trainer:
 		# target_policy: batch, num_unroll_steps+1, len(action_space)
 		target_value_batch = network.scalar_to_support(target_value_batch, self.config.support)
 		target_reward_batch = network.scalar_to_support(target_reward_batch, self.config.support)
-		# target_value: batch, num_unroll_steps+1, 2*support_size+1
-		# target_reward: batch, num_unroll_steps+1, 2*support_size+1
-
+		# target_value: batch, num_unroll_steps+1, 2*support+1
+		# target_reward: batch, num_unroll_steps+1, 2*support+1
+		class tmp:#I don't know better solution
+			def __init__(self, value=None):
+				self.value=value
+			def set(self, value):
+				self.value=value
+		last_loss=tmp()
+		last_value_loss=tmp()
+		last_reward_loss=tmp()
+		last_policy_loss=tmp()
 		## Generate predictions
-		last_loss,last_value_loss,last_reward_loss,last_policy_loss=[None]*4
 		def loss_fn():
-			value, reward, policy_logits, hidden_state = self.model.initial_inference(
+			output=self.model.initial_inference(
 				observation_batch
 			)
-			predictions = [(value, reward, policy_logits)]#type 0
+			hidden_state=output.hidden_state
+			value=output.value
+			reward=np.zeros_like(value)
+			policy_logits=output.policy
+			predictions = []#type 0
 			for i in range(1, action_batch.shape[1],2):
-				_, _, _, hidden_state = self.model.recurrent_inference(
+				hidden_state = self.model.recurrent_inference(
 					hidden_state, action_batch[:, i]
-				)
+				).hidden_state
 				hidden_state=scale_gradient(hidden_state, 0.5)
-				value, reward, policy_logits, hidden_state = self.model.recurrent_inference(
+				output = self.model.recurrent_inference(
 					hidden_state, action_batch[:, i+1]
 				)
+				reward=output.reward
+				hidden_state=output.hidden_state
+				value=output.value
+				policy_logits=output.policy
 				# Scale the gradient at the start of the dynamics function (See paper appendix Training)
 				hidden_state=scale_gradient(hidden_state, 0.5)
 				predictions.append((value, reward, policy_logits))
-			# predictions: num_unroll_steps+1, 3, batch, 2*support_size+1 | 2*support_size+1 | 9 (according to the 2nd dim)
-			total_value_loss,total_reward_loss,total_policy_loss=tf.zeros((batchsize))
+			# predictions: num_unroll_steps+1, 3, batch, 2*support+1 | 2*support+1 | 9 (according to the 2nd dim)
+			total_value_loss,total_reward_loss,total_policy_loss=tf.zeros((batchsize)),tf.zeros((batchsize)),tf.zeros((batchsize))
 			# shape of losses: batchsize
 			for i, prediction in enumerate(predictions):
 				value, reward, policy_logits = prediction
@@ -148,39 +163,38 @@ class Trainer:
 					total_value_loss+=scale_gradient(value_loss, 1.0/(len(predictions)-1))
 					total_reward_loss+=scale_gradient(reward_loss, 1.0/(len(predictions)-1))
 					total_policy_loss+=scale_gradient(policy_loss, 1.0/(len(predictions)-1))
-				pred_value_scalar = network.support_to_scalar(value, self.config.support_size)
+				pred_value_scalar = network.support_to_scalar(value, self.config.support)
 				priorities[:, i] = (
 					np.abs(pred_value_scalar - target_value_scalar[:, i])
 					** self.config.PER_alpha
 				)
 			# Scale the value loss, paper recommends by 0.25 (See paper appendix Reanalyze)
-			loss = total_value_loss * self.config.value_loss_weight + total_reward_loss + total_policy_loss
+			loss = total_value_loss * self.config.value_loss_weight + total_reward_loss + total_policy_loss*1.5
 			if self.config.PER:
 				# Correct PER bias by using importance-sampling (IS) weights
 				loss *= weight_batch
 			# (Deepmind's pseudocode do a sum, and werner-duvaud/muzero-general do a mean. Both are the same.) 
 			loss=tf.math.reduce_mean(loss)#now loss is a scalar
-			last_loss=loss.numpy()
-			last_value_loss=tf.math.reduce_mean(total_value_loss).numpy()
-			last_reward_loss=tf.math.reduce_mean(total_reward_loss).numpy()
-			last_policy_loss=tf.math.reduce_mean(total_policy_loss).numpy()
+			last_loss.set(loss.numpy())
+			last_value_loss.set(tf.math.reduce_mean(total_value_loss).numpy())
+			last_reward_loss.set(tf.math.reduce_mean(total_reward_loss).numpy())
+			last_policy_loss.set(tf.math.reduce_mean(total_policy_loss).numpy())
 			return loss
 
 		# Optimize
 		for _ in range(self.config.steps_per_batch):
 			self.optimizer.minimize(loss_fn,self.model.trainable_variables)
 			self.training_step += 1
-
 			if self.training_step % self.config.checkpoint_interval == 0:
 				shared_storage.save_weights(copy.deepcopy(self.model.get_weights()))
 				shared_storage.save()
 		return (
 			priorities,
 			# For log purpose
-			last_loss,
-			last_value_loss,
-			last_reward_loss,
-			last_policy_loss,
+			last_loss.value,
+			last_value_loss.value,
+			last_reward_loss.value,
+			last_policy_loss.value,
 		)
 
 	def update_learning_rate(self):

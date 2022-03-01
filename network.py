@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 import tensorflow as tf
-
+import my_config
 
 def scale_hidden_state(to_scale_hidden_state:np.array):
 	'''
@@ -86,6 +86,16 @@ def action_to_onehot(board_size, action):
 	ret=np.zeros((4+2*board_size**2),dtype=np.float32)
 	ret[action]=1
 	return ret
+def batch_action_to_onehot(board_size, action_batch):
+	batch_size=action_batch.shape[0]
+	ret=tf.zeros((batch_size*(4+2*board_size**2)),dtype=np.float32)
+	indices=action_batch+(tf.range(batch_size)*(4+2*board_size**2))
+	indices=tf.expand_dims(indices, axis=-1)
+	ret=tf.tensor_scatter_nd_update(
+		ret,indices=indices,updates=tf.ones((batch_size),dtype=np.float32)
+	)
+	ret=tf.reshape(ret,(batch_size,(4+2*board_size**2)))
+	return ret
 NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state','value','policy'])
 
 												####shapes:###
@@ -96,12 +106,22 @@ NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state',
 #action:			one-hotted, in shape of (batch_size,4+2*boardsize**2)
 #policy:			in shape of (batch_size,4(UDLR))
 #value and reward:	in shape of (batch_size,full_support_size) if using support, else (batch_size,1) #about "support", described at config.py:53
-def my_adjust_dims(inputs,expected_shape_length):
-	delta=len(inputs.shape)-expected_shape_length
+def my_adjust_dims(inputs,expected_shape_length,axis=0):
+	'''
+	axis: 0:default, 1:first, 2:last
+	'''
+	axises=len(inputs.shape)
+	delta=axises-expected_shape_length
 	if delta<0:
-		inputs=np.expand_dims(inputs,axis=list(range(-delta)))
+		if axis==0 or axis==1:
+			inputs=np.expand_dims(inputs,axis=list(range(-delta)))
+		else:
+			inputs=np.expand_dims(inputs,axis=list(range(delta,0)))
 	if delta>0:
-		inputs=inputs.reshape((*inputs.shape[:-delta-1],-1))
+		if axis==0 or axis==2:
+			inputs=inputs.reshape((*inputs.shape[:-delta-1],-1))
+		else:
+			inputs=inputs.reshape((-1,*inputs.shape[delta+1:]))
 	return inputs
 class AbstractNetwork(ABC):
 	'''
@@ -148,7 +168,8 @@ class AbstractNetwork(ABC):
 		'''
 		directly inference, for training
 		'''
-		hidden_state, reward=self.dynamics(hidden_state, action)
+		action_onehot=batch_action_to_onehot(self.config.board_size,action)
+		hidden_state, reward=self.dynamics(hidden_state, action_onehot)
 		hidden_state=scale_hidden_state(hidden_state)
 		policy,value=self.prediction(hidden_state)
 		return NetworkOutput(policy=policy,value=value,reward=reward,hidden_state=hidden_state)
@@ -202,10 +223,19 @@ class FullyConnectedNetwork(AbstractNetwork):
 	def dynamics(self, hidden_state, action):
 		'''
 		hidden state can be flattened or not
+		action should be onehotted
 		'''
 		hidden_state=my_adjust_dims(hidden_state, 2)
-		concatenated_inputs=np.concatenate((hidden_state,action),axis=0)
+		action=my_adjust_dims(action, 2, 2)
+		concatenated_inputs=np.concatenate((hidden_state,action),axis=1)
 		hidden_state,reward=self.dynamics_model(concatenated_inputs)
+		hidden_state=scale_hidden_state(hidden_state)
+		return hidden_state,reward
+	def dynamics_for_manager(self, inputs):
+		'''
+		batched and concatenated inputs
+		'''
+		hidden_state,reward=self.dynamics_model(inputs)
 		hidden_state=scale_hidden_state(hidden_state)
 		return hidden_state,reward
 	def prediction(self, hidden_state):
@@ -265,16 +295,7 @@ class FullyConnectedNetwork(AbstractNetwork):
 			return [(first[i],second[i]) for i in range(first.shape[0])]
 			'''
 			#return tf.concat((first,second),axis=1)
-			
-	def representation(self,observation):
-		return scale_hidden_state(self.representation_model(observation))
-	def dynamics(self,inputs):
-		hidden_state,reward=self.dynamics_model(inputs)
-		hidden_state=scale_hidden_state(hidden_state)
-		return hidden_state,reward
-	def prediction(self,hidden_state):
-		policy,value=self.prediction_model(hidden_state)
-		return policy,value
+		
 	def get_weights(self):
 		return {'representation':self.representation_model.get_weights(),'dynamics':self.dynamics_model.get_weights(),'prediction':self.prediction_model.get_weights()}
 	def set_weights(self,weights):
@@ -322,7 +343,7 @@ class Manager:
 		#callable model
 		self.model=model
 		self.representation=model.representation
-		self.dynamics=model.dynamics
+		self.dynamics=model.dynamics_for_manager
 		self.prediction=model.prediction
 		self.representation_queue=asyncio.queues.Queue(config.model_max_threads)
 		self.dynamics_queue=asyncio.queues.Queue(config.model_max_threads)
@@ -404,9 +425,10 @@ class Predictor:
 	'''
 	queuing and predict with manager
 	'''
-	def __init__(self,manager:Manager):
+	def __init__(self,manager:Manager,config:my_config.Config):
 		self.manager=manager
 		self.push_queue=manager.push_queue
+		self.config=config
 		
 	async def get_outputs(self,inputs,network):
 		future=await self.push_queue(inputs,network)
@@ -432,6 +454,7 @@ class Predictor:
 			action:one-hotted, (4+2*boardsize**2)
 		'''
 		hidden_state=my_adjust_dims(hidden_state, 1)
+		action=action_to_onehot(self.config.board_size,action)
 		inputs=np.concatenate((hidden_state,action),axis=0)
 		new_hidden_state,reward=await self.get_outputs(inputs,'dynamics')#hidden state is already scaled
 		

@@ -253,7 +253,7 @@ class MCTS:
 		parent=search_path[-2]
 		output=await self.predictor.recurrent_inference(
 			parent.hidden_state,
-			network.action_to_onehot(self.config.board_size,action)
+			action
 		)
 		if now_type==1:
 			actions=self.config.action_space_type1

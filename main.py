@@ -117,6 +117,9 @@ class MuZero:
 		self.replay_buffer_worker = None
 		self.shared_storage_worker = None
 		self.file_writer=tf.summary.create_file_writer(self.config.results_path)
+		self.model=network.Network(self.config)
+		self.manager=network.Manager(self.config,self.model)
+		self.predictor=network.Predictor(self.manager,self.config)
 
 	def train(self, log_in_tensorboard=True):
 		"""
@@ -146,9 +149,6 @@ class MuZero:
 		'''
 		#I only have 1 gpu, I don't know the default ray uses, but I'll just not use .options to specify num_gpus
 		# Initialize workers
-		self.model=network.Network(self.config)
-		self.manager=network.Manager(self.config,self.model)
-		self.predictor=network.Predictor(self.manager)
 		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
 
 		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
@@ -164,25 +164,24 @@ class MuZero:
 		training_counter=0
 		try:
 			while 1:
-				'''
 				self.self_play_worker.self_play(
 					self.replay_buffer_worker, self.shared_storage_worker
-				)'''
-				ray.get(self.replay_buffer_worker.load_games.remote(1,5))
+				)
+				#if want to load existing game:
+				#ray.get(self.replay_buffer_worker.load_games.remote(1,5))
 				info=ray.get(self.replay_buffer_worker.get_info.remote())
 				self.shared_storage_worker.set_info(info)
 				print('done playing')
 				self.training_worker.run_update_weights(
 					self.replay_buffer_worker, self.shared_storage_worker
 				)
-				self.log_once(counter, training_counter, False)
 				print('done training')
 				self.reanalyze_worker.reanalyze(
 					self.replay_buffer_worker, self.shared_storage_worker
 				)
 				print('done reanalyzing')
 				counter, training_counter=self.log_once(counter, training_counter)
-				break
+				print(f'counter:{counter},training_counter:{training_counter}')
 		except KeyboardInterrupt:
 			pass
 		# Persist replay buffer to disk
@@ -224,7 +223,6 @@ class MuZero:
 				"Model summary", self.summary, 0
 			)
 			# Loop for updating the training performance
-			counter = 0
 			keys=[
 				#from test_worker
 				"total_reward",#score
@@ -319,7 +317,7 @@ class MuZero:
 
 		print("\n\nPersisting replay buffer games to disk...")
 		replay_buffer = ray.get(self.replay_buffer_worker.get_buffer.remote())
-		self.shared_storage_worker.save(replay_buffer)
+		self.shared_storage_worker.save(replay_buffer,self.model)
 
 		print("\nShutting down workers...")
 
@@ -332,7 +330,7 @@ class MuZero:
 
 		print('done saving')
 
-	def load_model(self, checkpoint_path=None, replay_buffer_path=None):
+	def load_model(self, checkpoint_path=None, replay_buffer_path=None, model_path=None):
 		"""
 		Load a model and/or a saved replay buffer.
 
@@ -365,6 +363,15 @@ class MuZero:
 				self.checkpoint["num_played_steps"] = 0
 				self.checkpoint["num_played_games"] = 0
 				self.checkpoint["num_reanalyzed_games"] = 0
+		if model_path:
+			if os.path.exists(model_path):
+				with open(model_path, "rb") as f:
+					weights=pickle.load(f)
+					self.model.set_weights(weights)
+				print(f"\nUsing checkpoint from {model_path}")
+			else:
+				print(f"\nThere is no model saved in {model_path}.")
+
 	def load_model_menu(self):
 		# Configure running options
 		options = sorted(glob.glob(f"results/*/"),reverse=True) + ["Specify paths manually"]
@@ -394,11 +401,11 @@ class MuZero:
 			#default to choose newest data
 			with open(f'{options[choice]}newest_training_step','r') as F:
 				newest_training_step=F.read()
-			checkpoint_path = f"{options[choice]}model-{newest_training_step}.pkl"
+			checkpoint_path = f"{options[choice]}info-{newest_training_step}.pkl"
 			replay_buffer_path = f"{options[choice]}replay_buffer-{newest_training_step}.pkl"
-
+			model_path = f"{options[choice]}model-{newest_training_step}.pkl"
 		self.load_model(
-			checkpoint_path=checkpoint_path, replay_buffer_path=replay_buffer_path,
+			checkpoint_path=checkpoint_path, replay_buffer_path=replay_buffer_path, model_path=model_path,
 		)
 
 if __name__ == "__main__":
@@ -413,7 +420,6 @@ if __name__ == "__main__":
 
 		while True:
 			# Configure running options
-			'''
 			options = [
 				"Train",
 				"Load pretrained model",
@@ -430,8 +436,6 @@ if __name__ == "__main__":
 			while choice not in valid_inputs:
 				choice = input("Invalid input, enter a number listed above: ")
 			choice = int(choice)
-			'''
-			choice=0
 			if choice == 0:
 				muzero.train()
 			elif choice == 1:
