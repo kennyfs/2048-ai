@@ -58,9 +58,9 @@ class Config:
 		self.known_bounds=known_bounds
 		### Network info
 		self.observation_channels=self.board_size**2
-		self.network_type='fullyconnected'#'resnet'/'fullyconnected'/...
+		self.network_type='resnet'#'resnet'/'fullyconnected'/...
 		self.support=100# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
-		#this = 0 means not using support
+		#this = 0 means not using support. Muzero uses 300, which can represent up to 90000.
 		
 		# Fully Connected Network
 		self.hidden_state_size=64
@@ -73,6 +73,15 @@ class Config:
 		self.prediction_policy_head_size=[64,64]# Define the hidden layers in policy head of the prediction network
 		#Fully Connected Network doesn't work well
 
+		#ResNet Network
+		self.num_channels=128
+		self.num_blocks=10
+		self.reduced_channels_value=1
+		self.reduced_channels_policy=2
+		self.reduced_channels_reward=1
+		self.value_layers=[256]
+		self.policy_layers=[]
+		self.reward_layers=[256]
 		### Training
 		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
 		self.training_steps=int(100e3)
@@ -115,6 +124,9 @@ class Config:
 		self.reanalyze_games_to_selfplay_games_ratio=0.8
 		self.selfplay_games_to_test_games_ratio=0.1
 		self.selfplay_games_per_run=10
+
+		#manager config
+		self.manager_queue=False
 def default_config():
 	return Config(
 		max_moves=1000000,#it can be infinity because any 2048 game is bound to end

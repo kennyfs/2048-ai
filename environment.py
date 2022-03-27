@@ -97,7 +97,7 @@ class Environment:
 					self.grid[i][j]=res[j]
 		if self.action_to_type(action)==0:
 			return self.score-beforescore
-		x,y,num=self.add_action_to_pos(action)
+		x,y,num=add_action_to_pos(action,self.board_size)
 		self.grid[x][y]=num
 		return 0
 	def render(self):
@@ -167,26 +167,27 @@ class Environment:
 		
 	def change_type(self):
 		self.now_type=1 if self.now_type==0 else 0
-	def add_action_to_pos(self,Action:int):
-		'''
-		return type:
-			x,y,num(1 or 2)
-		'''
-		assert 4<=Action and Action<4+2*self.board_size**2
-		Action-=4
-		num=Action//(self.board_size**2)
-		Action%=self.board_size**2
-		return Action//self.board_size,Action%self.board_size,num+1
+	### todo:These should move out of class...
 	def add_pos_to_action(self,x,y,num):
 		return 4+x*self.board_size+y+(num-1)*self.board_size**2
 	def action_to_string(self,action:int)->str:
 		if self.action_to_type(action)==0:
 			return (['Up','Down','Left','Right'])[action]
 		#type 1(add tile)
-		x,y,num=self.add_action_to_pos(action)
+		x,y,num=add_action_to_pos(action,self.board_size)
 		return f'Adding a {2**num} at {x},{y}'
 	def action_to_type(self,action):
 		assert action>=0 and action<4+2*self.board_size**2, f'action is {action}'# very likely impossible
 		if action<4:
 			return 0
 		return 1
+def add_action_to_pos(Action:int,board_size):
+	'''
+	return type:
+		x,y,num(1 or 2)
+	'''
+	assert 4<=Action and Action<4+2*board_size**2
+	Action-=4
+	num=Action//(board_size**2)
+	Action%=board_size**2
+	return Action//board_size,Action%board_size,num+1

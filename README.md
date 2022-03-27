@@ -4,15 +4,11 @@
 ## 進度  
 幾乎完成，目前selfplay、replay buffer都應該沒問題，現在被一個奇怪的bug卡住，詳情見[bug輸出](#bug)
 ## todo  
-- [ ] 除了shared storage、replay buffer都不要使用ray
-    - [X] selfplay
-    - [X] reanalyze
-    - [ ] trainer
-    - [X] main中的log（因為沒有用ray，不會同步執行）
-        - [X] scalar
-        - [X] loss
-- [ ] 整理myconfig中的順序，讓人比較好理解
-- [ ] 主要的流程控制  
+- [ ] 整理my_config.py中的順序，讓人比較好理解  
+- [ ] 確認資料處理沒問題（主要是replay buffer.py）  
+- [ ] 完成ResNet實作  
+- [ ] 完善checkpoint的儲存，main.py、network.py  
+- [ ] 主要的流程控制(main.py)  
 		
 ## 理解
 1. value target: bootstrap---value is expectant reward, so expectant score=value+reward in past

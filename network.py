@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 import tensorflow as tf
 import my_config
+import environment
 
 def scale_hidden_state(to_scale_hidden_state:np.array):
 	'''
@@ -12,7 +13,7 @@ def scale_hidden_state(to_scale_hidden_state:np.array):
 	shape:(batchsize, hidden_state_size) or (batchsize, hidden_state_size_x, hidden_state_size_y)
 	'''
 	shape=to_scale_hidden_state.shape
-	hidden_state_as_matrix=len(shape)==3
+	hidden_state_as_matrix=(len(shape)==4)
 	if hidden_state_as_matrix:
 		to_scale_hidden_state=tf.reshape(to_scale_hidden_state,(shape[0],-1))#flatten from [batch_size,hidden_state_size_x,hidden_state_size_y] to [batch_size,hidden_state_size_x*hidden_state_size_y]
 	min_encoded_state = tf.math.reduce_min(to_scale_hidden_state,axis=1,keepdims=True)
@@ -82,19 +83,37 @@ def scalar_to_support(x, support_size):####todo: implement
 	)
 	logits=tf.reshape(logits,(*original_shape,-1))
 	return logits
-def action_to_onehot(board_size, action):
-	ret=np.zeros((4+2*board_size**2),dtype=np.float32)
-	ret[action]=1
+def action_to_onehot(action, board_size, matrix=False):
+	if type(action)==list or type(action)==np.array:
+		action=action[0]
+	action=int(action)
+	if matrix:
+		#4 planes for UDLR, next 2 planes for putting 2 or 4
+		ret=np.zeros((4+2,board_size,board_size))
+		if 0<=action and action<4:
+			ret[action,:,:]=1/(board_size**2)
+		else:
+			x,y,num=environment.add_action_to_pos(action,board_size)
+			num-=1
+			ret[4+num,x,y]=1
+	else:
+		ret=np.zeros((4+2*board_size**2),dtype=np.float32)
+		ret[action]=1
 	return ret
-def batch_action_to_onehot(board_size, action_batch):
+def batch_action_to_onehot(action_batch, board_size, matrix=False):
 	batch_size=action_batch.shape[0]
-	ret=tf.zeros((batch_size*(4+2*board_size**2)),dtype=np.float32)
-	indices=action_batch+(tf.range(batch_size)*(4+2*board_size**2))
-	indices=tf.expand_dims(indices, axis=-1)
-	ret=tf.tensor_scatter_nd_update(
-		ret,indices=indices,updates=tf.ones((batch_size),dtype=np.float32)
-	)
-	ret=tf.reshape(ret,(batch_size,(4+2*board_size**2)))
+
+	if matrix:
+		ret=np.concatenate([np.expand_dims(action_to_onehot(action,board_size,matrix=True),axis=0) for action in action_batch],axis=0)
+		#shape:(batch_size,4+2,board_size,board_size)
+	else:
+		ret=tf.zeros((batch_size*(4+2*board_size**2)),dtype=np.float32)
+		indices=action_batch+(tf.range(batch_size)*(4+2*board_size**2))
+		indices=tf.expand_dims(indices, axis=-1)
+		ret=tf.tensor_scatter_nd_update(
+			ret,indices=indices,updates=tf.ones((batch_size),dtype=np.float32)
+		)
+		ret=tf.reshape(ret,(batch_size,(4+2*board_size**2)))
 	return ret
 NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state','value','policy'])
 
@@ -102,10 +121,11 @@ NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state',
 #observation:		in shape of (batch_size,channels,board_size_x,board_size_y)#board_size_x=board_size_y in most cases
 #channels=history_length*planes per image
 #hidden_state:		in shape of (batch_size,hidden_state_size(32))
-#					or (batch_size,hidden_state_size_x,hidden_state_size_y)
-#action:			one-hotted, in shape of (batch_size,4+2*boardsize**2)
+#					or (batch_size, num_channels, hidden_state_size_x, hidden_state_size_y)
+#action:			if one-hotted, for fully connected network in shape of (batch_size,4+2*boardsize**2)
+#					if one-hotted, for resnet in shape of (batch_size,4+2,boardsize,boardsize)#4 for UDLR, 2 for put 2 or 4
 #policy:			in shape of (batch_size,4(UDLR))
-#value and reward:	in shape of (batch_size,full_support_size) if using support, else (batch_size,1) #about "support", described at config.py:53
+#value and reward:	in shape of (batch_size,full_support_size) if using support, else (batch_size,1) #about "support", described in config.py
 def my_adjust_dims(inputs,expected_shape_length,axis=0):
 	'''
 	axis: 0:default, 1:first, 2:last
@@ -164,11 +184,14 @@ class AbstractNetwork(ABC):
 		#policy:batch, 4
 		#value:batch, 1 if not support, else batch, support*2+1
 		return NetworkOutput(policy=policy,value=value,reward=None,hidden_state=hidden_state)
-	def recurrent_inference(self, hidden_state, action):
+	def recurrent_inference(self, hidden_state, action, matrix=False)->NetworkOutput:
 		'''
 		directly inference, for training
 		'''
-		action_onehot=batch_action_to_onehot(self.config.board_size,action)
+		#auto detect matrix
+		if not matrix and len(hidden_state.shape)==4:
+			matrix=True
+		action_onehot=batch_action_to_onehot(action, self.config.board_size, matrix=matrix)
 		hidden_state, reward=self.dynamics(hidden_state, action_onehot)
 		hidden_state=scale_hidden_state(hidden_state)
 		policy,value=self.prediction(hidden_state)
@@ -186,8 +209,14 @@ class Network:
 	def __new__(cls,config):
 		if config.network_type=="fullyconnected":
 			return FullyConnectedNetwork(config)
+		elif config.network_type=="resnet":
+			return ResNetNetwork(config)
 		else:
 			raise NotImplementedError
+
+##################################
+######## Fully Connected #########
+
 class FullyConnectedNetwork(AbstractNetwork):
 	def __init__(self,config):
 		super().__init__()
@@ -241,20 +270,19 @@ class FullyConnectedNetwork(AbstractNetwork):
 	def prediction(self, hidden_state):
 		hidden_state=my_adjust_dims(hidden_state, 2)
 		return self.prediction_model(hidden_state)
-	class one_output_model(tf.keras.Model):
+	class one_output_model:
 		def __init__(self,input_size,sizes,output_size):
-			super().__init__()
 			self.my_layers=[tf.keras.layers.Flatten()]
 			for size in sizes+[output_size]:
 				self.my_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
-			self.build([10,input_size])
+			self.build([1,input_size])
 
-		def call(self,x,training=False):
+		def __call__(self,x,training=False):
 			for layer in self.my_layers:
 				x=layer(x)
 			return x
 			
-	class two_outputs_model(tf.keras.Model):
+	class two_outputs_model:
 		def __init__(self,
 				input_size,
 				common_size,
@@ -262,7 +290,6 @@ class FullyConnectedNetwork(AbstractNetwork):
 				second_head_size,
 				first_output_size,
 				second_output_size):
-			super().__init__()
 			self.common_layers=[]
 			self.first_head_layers=[]
 			self.second_head_layers=[]
@@ -275,9 +302,9 @@ class FullyConnectedNetwork(AbstractNetwork):
 				
 			for size in second_head_size+[second_output_size]:
 				self.second_head_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
-			self.build([10,input_size])
+			self.build([1,input_size])
 
-		def call(self,x,training=False):
+		def __call__(self,x,training=False):
 			for layer in self.common_layers:
 				x=layer(x)
 			
@@ -327,6 +354,192 @@ class FullyConnectedNetwork(AbstractNetwork):
 			model.summary(print_fn=lambda x: stringlist.append(x))
 			ret += "\n".join(stringlist)
 		return ret
+
+###### End Fully Connected #######
+##################################
+
+##################################
+########## CNN or RESNET #########
+
+def conv3x3(out_channels, stride=1):
+	return tf.keras.layers.Conv2D(out_channels, kernel_size=3, strides=stride, padding='same', use_bias=False, data_format='channels_first')
+def conv1x1(out_channels, stride=1):
+	return tf.keras.layers.Conv2D(out_channels, kernel_size=1, strides=stride, padding='same', use_bias=False, data_format='channels_first')
+class ResidualBlock:
+	def __init__(self, num_channels):
+		self.conv1 = conv3x3(num_channels, num_channels)
+		self.conv2 = conv3x3(num_channels, num_channels)
+		self.bn1 = tf.keras.layers.BatchNormalization()
+		self.bn2 = tf.keras.layers.BatchNormalization()
+		self.relu = tf.keras.layers.ReLU()
+	def __call__(self, x):
+		residual = x
+		out = self.relu(self.bn1(self.conv1(x)))
+		out = self.bn2(self.conv2(out))
+		out += residual#no need for deepcopy?
+		out = self.relu(out)
+		return out
+
+#no need to downsample because 2048 is only 4x4
+
+class representation(tf.keras.Model):
+	def __init__(self, input_shape, num_channels, num_blocks):
+		super().__init__()
+		self.conv=conv3x3(num_channels)
+		self.bn=tf.keras.layers.BatchNormalization()
+		self.relu=tf.keras.layers.ReLU()
+		self.resblock=[ResidualBlock(num_channels) for i in range(num_blocks)]
+		self.build([1]+input_shape)
+
+	def call(self,x):
+		out=self.conv(x)
+		out=self.bn(out)
+		out=self.relu(out)
+		for block in self.resblock:
+			out=block(out)
+		return out
+
+class dynamics(tf.keras.Model):
+	def __init__(self,
+		input_shape,
+		num_channels,
+		num_blocks,
+		reduced_channels_reward,
+		reward_layers,
+		support):
+		super().__init__()
+		self.conv=conv3x3(num_channels)
+		self.bn=tf.keras.layers.BatchNormalization()
+		self.relu=tf.keras.layers.ReLU()
+		self.resblock=[ResidualBlock(num_channels) for i in range(num_blocks)]
+
+		self.conv_reward=conv1x1(reduced_channels_reward)
+		self.bn_reward=tf.keras.layers.BatchNormalization()
+		self.flatten=tf.keras.layers.Flatten()
+		self.reward_output=[tf.keras.layers.Dense(size) for size in reward_layers]+[tf.keras.layers.Dense(support*2+1)]
+		self.build([1]+input_shape)
+
+	def call(self,x):
+		out=self.conv(x)
+		out=self.bn(out)
+		out=self.relu(out)
+		for block in self.resblock:
+			out=block(out)
+		hidden_state=out
+		out=self.conv_reward(out)
+		out=self.bn_reward(out)
+		out=self.flatten(out)
+		out=self.relu(out)
+		for layer in self.reward_output:
+			out=layer(out)
+		reward=out
+		return hidden_state, reward
+
+class prediction(tf.keras.Model):
+	def __init__(self,
+		input_shape,
+		action_space_size,
+		reduced_channels_value,
+        reduced_channels_policy,
+		value_layers,
+		policy_layers,
+		support):
+		super().__init__()
+		self.conv1x1_value=conv1x1(reduced_channels_value)
+		self.conv1x1_policy=conv1x1(reduced_channels_policy)
+		self.flatten=tf.keras.layers.Flatten()
+		self.dense_value=[tf.keras.layers.Dense(size) for size in value_layers]+[tf.keras.layers.Dense(support*2+1)]
+		self.dense_policy=[tf.keras.layers.Dense(size) for size in policy_layers]+[tf.keras.layers.Dense(action_space_size)]
+		self.build([1]+input_shape)
+
+	def call(self,x):
+		out=self.conv1x1_policy(x)
+		out=self.flatten(out)
+		for layer in self.dense_policy:
+			out=layer(out)
+		policy=out
+
+		out=self.conv1x1_value(x)
+		out=self.flatten(out)
+		for layer in self.dense_value:
+			out=layer(out)
+		value=out
+		return policy, value
+
+class ResNetNetwork(AbstractNetwork):
+	def __init__(self, config:my_config.Config):
+		super().__init__()
+		self.config=config
+		self.representation_model=representation(
+			[config.observation_channels, config.board_size, config.board_size],
+			config.num_channels,
+			config.num_blocks)
+		self.dynamics_model=dynamics(
+			[config.num_channels+6, config.board_size, config.board_size],
+			config.num_channels,
+			config.num_blocks,
+			config.reduced_channels_reward,
+			config.reward_layers,
+			config.support)
+		self.prediction_model=prediction(
+			[config.num_channels, config.board_size, config.board_size],
+			4,
+			config.reduced_channels_value,
+			config.reduced_channels_policy,
+			config.value_layers,
+			config.policy_layers,
+			config.support)
+		self.trainable_variables=self.representation_model.trainable_variables+self.dynamics_model.trainable_variables+self.prediction_model.trainable_variables
+	def representation(self, observation):
+		return scale_hidden_state(self.representation_model(observation))
+	def dynamics(self, hidden_state, action):
+		myinput=tf.concat([hidden_state, action], axis=1)
+		hidden_state, reward=self.dynamics_model(myinput)
+		return hidden_state, reward
+	def dynamics_for_manager(self, inputs):
+		'''
+		batched and concatenated inputs
+		'''
+		hidden_state,reward=self.dynamics_model(inputs)
+		hidden_state=scale_hidden_state(hidden_state)
+		return hidden_state,reward
+	def prediction(self, hidden_state):
+		policy, value=self.prediction_model(hidden_state)
+		return policy, value
+	def get_weights(self):
+		return {'representation':self.representation_model.get_weights(),'dynamics':self.dynamics_model.get_weights(),'prediction':self.prediction_model.get_weights()}
+	def set_weights(self,weights):
+		'''
+		set weights of 3 networks
+		weights can be {name(str):weights(np.ndarray)}
+		or list of 3 weights [weights(np.ndarray)]
+		'''
+		if isinstance(weights,dict):
+			for name,weight in weights.items():
+				if name=='representation':
+					self.representation_model.set_weights(weight)
+				elif name=='dynamics':
+					self.dynamics_model.set_weights(weight)
+				elif name=='prediction':
+					self.prediction_model.set_weights(weight)
+				else:
+					raise NotImplementedError
+		elif isinstance(weights,list):
+			self.representation_model.set_weights(weights[0])
+			self.dynamics_model.set_weights(weights[1])
+			self.prediction_model.set_weights(weights[2])
+		else:
+			raise NotImplementedError
+	def summary(self):
+		ret=''
+		for model in self.representation_model,self.dynamics_model,self.prediction_model:
+			stringlist = []
+			model.summary(print_fn=lambda x: stringlist.append(x))
+			ret += "\n".join(stringlist)
+		return ret
+####### End CNN or RESNET ########
+##################################
+
 QueueItem=collections.namedtuple("QueueItem",['inputs','future'])
 class Manager:
 	'''
@@ -426,6 +639,7 @@ class Predictor:
 	queuing and predict with manager
 	'''
 	def __init__(self,manager:Manager,config:my_config.Config):
+		self.mode=config.network_type#'resnet'/'fullyconnected'/...
 		self.manager=manager
 		self.push_queue=manager.push_queue
 		self.config=config
@@ -450,11 +664,15 @@ class Predictor:
 		temporarily only for fully connected network.
 		input shape:
 			all be without batchsize
-			hidden_state:(hidden_state_size(32)) or (hidden_state_size_x,hidden_state_size_y)
-			action:one-hotted, (4+2*boardsize**2)
+			hidden_state:(hidden_state_size(32))
+			action:(1) or ()
+
+			for resnet
+			hidden_state:(num_channels, hidden_state_size_x, hidden_state_size_y)
 		'''
-		hidden_state=my_adjust_dims(hidden_state, 1)
-		action=action_to_onehot(self.config.board_size,action)
+		if type(action) in (list,np.array):
+			action=action[0]
+		action=action_to_onehot(action, self.config.board_size, matrix=(self.mode=='resnet'))
 		inputs=np.concatenate((hidden_state,action),axis=0)
 		new_hidden_state,reward=await self.get_outputs(inputs,'dynamics')#hidden state is already scaled
 		

@@ -249,6 +249,8 @@ class ReplayBuffer:
 		target_values, target_rewards, target_policies, actions = [], [], [], []
 		def append_none(action):
 			actions.append(action)
+		append_none(1)
+		### todo: ensure data processing is all right
 		for current_index in range(
 			state_index+1, state_index + self.config.num_unroll_steps + 1
 		):
