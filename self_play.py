@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import copy
+from lib2to3.pytree import Base
 import math
 import environment
 import random
@@ -34,19 +35,23 @@ class MinMaxStats():
 class GameHistory:####
 	"""
 	Store only usefull information of a self-play game.
+	
+	IMPORTANT!!!
 	at time t, gamehistory[t] should contain the information about:
 	observation, value, child_visits at time t
-	action, reward, action type from t-1 to t
+	action, reward, action_type arising from t-1 to t
 	"""
 	#states followed by actions of type x = "type x state"
 	def __init__(self):
 		self.observation_history = []
+		self.child_visits = []
+		self.root_values = []
+
 		self.action_history = []
 		self.reward_history = []
 		self.type_history = []
-		self.child_visits = []
-		self.root_values = []
-		self.length = 0
+
+		self.length = 0#+1 when calling GameHistory.add
 		self.reanalyzed_predicted_root_values = None
 		# For PER
 		self.priorities = None
@@ -69,6 +74,7 @@ class GameHistory:####
 
 			self.root_values.append(root.value())
 		else:
+			raise BaseException('store_search_statistics receive root as None')
 			self.root_values.append(None)
 
 	def get_stacked_observations(self, index, num_stacked_observations):
@@ -228,46 +234,40 @@ class MCTS:
 		}#sometimes useful for debugging or playing?
 		return root, extra_info
 	async def tree_search(self, node, now_type, min_max_stats):#->int|None:
-		###Independent MCTS, run one simulation###
-
-		# reduce parallel search number
 		async with self.sem:
-			await self.start_tree_search(node, now_type, min_max_stats)
+			now_expanding = self.now_expanding
 
-	async def start_tree_search(self, node, now_type, min_max_stats):#->int|None:
-		now_expanding = self.now_expanding
-
-		search_path=[node]
-		current_tree_depth = 0
-		#now_type is always the type of action to this node
-		while node.expanded():
-			current_tree_depth += 1
-			action, node = self.select_child(node, now_type, min_max_stats)
-			search_path.append(node)
-			now_type=1 if now_type==0 else 0
-			while node in now_expanding:
-				await asyncio.sleep(1e-4)
-		self.now_expanding.add(node)
-		# Inside the search tree we use the dynamics function to obtain the next hidden
-		# state given an action and the previous hidden state
-		parent=search_path[-2]
-		output=await self.predictor.recurrent_inference(
-			parent.hidden_state,
-			action
-		)
-		if now_type==1:
-			actions=self.config.action_space_type1
-		else:
-			actions=self.config.action_space_type0
-		node.expand(
-			actions,
-			now_type,
-			output.reward,
-			output.policy if now_type==0 else self.config.type1_p,
-			output.hidden_state,
-		)
-		self.now_expanding.remove(node)
-		self.backpropagate(search_path, output.value, now_type, min_max_stats)
+			search_path=[node]
+			current_tree_depth = 0
+			#now_type is always the type of action to this node
+			while node.expanded():
+				current_tree_depth += 1
+				action, node = self.select_child(node, now_type, min_max_stats)
+				search_path.append(node)
+				now_type=1 if now_type==0 else 0
+				while node in now_expanding:
+					await asyncio.sleep(1e-4)
+			self.now_expanding.add(node)
+			# Inside the search tree we use the dynamics function to obtain the next hidden
+			# state given an action and the previous hidden state
+			parent=search_path[-2]
+			output=await self.predictor.recurrent_inference(
+				parent.hidden_state,
+				action
+			)
+			if now_type==1:
+				actions=self.config.action_space_type1
+			else:
+				actions=self.config.action_space_type0
+			node.expand(
+				actions,
+				now_type,
+				output.reward,
+				output.policy if now_type==0 else self.config.type1_p,
+				output.hidden_state,
+			)
+			self.backpropagate(search_path, output.value, now_type, min_max_stats)
+			self.now_expanding.remove(node)
 		
 
 	def select_child(self, node, now_type, min_max_stats):
@@ -276,8 +276,8 @@ class MCTS:
 		So type 1 contains all possible positions.
 		"""
 		action=None
-		if now_type==1:#this can be really randomly choosing one, or based on ucb.
-			#randomly
+		if now_type==1:#should randomly choose one
+			#randomly choose one based on the policy in my_config.py
 			p=[child.prior for child in node.children.values()]
 			my_sum=sum(p)
 			if my_sum!=1:
@@ -407,6 +407,7 @@ class SelfPlay:
 		self.seed=seed
 		# Fix random generator seed
 		random.seed(seed)
+		np.random.seed(self.seed)
 
 		# Initialize the network
 		# should initialize manager, predictor at main.py, all selfplayer(self_play_worker*num_actors and test_worker*1)
@@ -504,6 +505,7 @@ class SelfPlay:
 					print(
 						f"Root value : {root.value():.2f}"
 					)
+					print(f'visits:{[node.visit_count for node in root.children.values()]}')
 				reward = game.step(action)#type changed here
 				observation=game.get_features()
 				if render:
@@ -521,6 +523,8 @@ class SelfPlay:
 				game_history.add(action,observation,0,1)
 				game_history.root_values.append(0)
 				game_history.child_visits.append(None)
+				if render:
+					game.render()
 			done=game.finish()
 			print(len(game_history.root_values))
 		return game_history
@@ -535,9 +539,8 @@ class SelfPlay:
 		in the config.
 		this function always choose from actions with type==0
 		"""
-		np.random.seed(self.seed+game_id)
 		visit_counts = np.array(
-			[child.visit_count for child in node.children.values()], dtype="int32"
+			[child.visit_count for child in node.children.values()], dtype=np.float32
 		)
 		actions = [action for action in node.children.keys()]
 		if temperature == 0:

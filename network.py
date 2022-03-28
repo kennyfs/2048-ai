@@ -270,19 +270,20 @@ class FullyConnectedNetwork(AbstractNetwork):
 	def prediction(self, hidden_state):
 		hidden_state=my_adjust_dims(hidden_state, 2)
 		return self.prediction_model(hidden_state)
-	class one_output_model:
+	class one_output_model(tf.keras.Model):
 		def __init__(self,input_size,sizes,output_size):
+			super().__init__()
 			self.my_layers=[tf.keras.layers.Flatten()]
 			for size in sizes+[output_size]:
 				self.my_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
 			self.build([1,input_size])
 
-		def __call__(self,x,training=False):
+		def call(self,x,training=False):
 			for layer in self.my_layers:
 				x=layer(x)
 			return x
 			
-	class two_outputs_model:
+	class two_outputs_model(tf.keras.Model):
 		def __init__(self,
 				input_size,
 				common_size,
@@ -290,6 +291,7 @@ class FullyConnectedNetwork(AbstractNetwork):
 				second_head_size,
 				first_output_size,
 				second_output_size):
+			super().__init__()
 			self.common_layers=[]
 			self.first_head_layers=[]
 			self.second_head_layers=[]
@@ -304,7 +306,7 @@ class FullyConnectedNetwork(AbstractNetwork):
 				self.second_head_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
 			self.build([1,input_size])
 
-		def __call__(self,x,training=False):
+		def call(self,x,training=False):
 			for layer in self.common_layers:
 				x=layer(x)
 			

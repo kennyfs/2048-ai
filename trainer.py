@@ -99,9 +99,9 @@ class Trainer:
 			target_policy_batch,
 			weight_batch,
 		) = batch#batches are all np.array
-		#for debug
-		#for b in batch:
-		#	print(b.shape)
+		#for debug, check the shape of the batch, maybe is useful
+		for b in batch:
+			print(b.shape)
 		batchsize=action_batch.shape[0]
 		# Keep values as scalars for calculating the priorities for the prioritized replay
 		target_value_scalar = np.copy(target_value_batch)
@@ -135,7 +135,7 @@ class Trainer:
 			reward=np.zeros_like(value)
 			policy_logits=output.policy
 			predictions = []#type 0
-			for i in range(0, action_batch.shape[1]-1,2):
+			for i in range(1, action_batch.shape[1],2):### start to check data processing here
 				hidden_state = self.model.recurrent_inference(
 					hidden_state, action_batch[:, i]
 				).hidden_state

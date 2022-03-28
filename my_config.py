@@ -58,19 +58,19 @@ class Config:
 		self.known_bounds=known_bounds
 		### Network info
 		self.observation_channels=self.board_size**2
-		self.network_type='resnet'#'resnet'/'fullyconnected'/...
+		self.network_type='fullyconnected'#'resnet'/'fullyconnected'/...
 		self.support=100# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
 		#this = 0 means not using support. Muzero uses 300, which can represent up to 90000.
 		
 		# Fully Connected Network
-		self.hidden_state_size=64
-		self.representation_size=[128,64,32]# Define the hidden layers in the representation network
-		self.dynamics_size=[128,128,128]# Define the hidden layers in the common parts of the dynamics network
-		self.dynamics_hidden_state_head_size=[128,128]# Define the hidden layers in hidden state head of the dynamics network
-		self.dynamics_reward_head_size=[64,64]# Define the hidden layers in reward head of the dynamics network
-		self.prediction_size=[128,84,64]# Define the hidden layers in the common parts of the prediction network
-		self.prediction_value_head_size=[64,64]# Define the hidden layers in value head of the prediction network
-		self.prediction_policy_head_size=[64,64]# Define the hidden layers in policy head of the prediction network
+		self.hidden_state_size=128
+		self.representation_size=[128]*5# Define the hidden layers in the representation network
+		self.dynamics_size=[128]*5# Define the hidden layers in the common parts of the dynamics network
+		self.dynamics_hidden_state_head_size=[]# Define the hidden layers in hidden state head of the dynamics network
+		self.dynamics_reward_head_size=[128]# Define the hidden layers in reward head of the dynamics network
+		self.prediction_size=[]# Define the hidden layers in the common parts of the prediction network
+		self.prediction_value_head_size=[128]# Define the hidden layers in value head of the prediction network
+		self.prediction_policy_head_size=[]# Define the hidden layers in policy head of the prediction network
 		#Fully Connected Network doesn't work well
 
 		#ResNet Network
@@ -82,6 +82,7 @@ class Config:
 		self.value_layers=[256]
 		self.policy_layers=[]
 		self.reward_layers=[256]
+		
 		### Training
 		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
 		self.training_steps=int(100e3)
@@ -93,6 +94,7 @@ class Config:
 		self.value_loss_weight=0.5#See paper appendix H Reanalyze
 		self.steps_per_batch=10
 		self.save_model=True
+		
 		#count adding(type 1), but not count them as network training target
 		self.td_steps=td_steps
 
@@ -120,7 +122,7 @@ class Config:
 
 		self.replay_buffer_size=1000
 		#overall hyperparameter
-		self.training_steps_to_selfplay_steps_ratio=0.2
+		self.training_steps_to_selfplay_steps_ratio=0.3
 		self.reanalyze_games_to_selfplay_games_ratio=0.8
 		self.selfplay_games_to_test_games_ratio=0.1
 		self.selfplay_games_per_run=10

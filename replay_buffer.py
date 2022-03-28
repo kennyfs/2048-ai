@@ -179,7 +179,7 @@ class ReplayBuffer:
 			position_index = np.random.choice(game_history.length)
 		while position_index+1<game_history.length and game_history.type_history[position_index+1]!=0:
 			position_index+=1
-		if position_index+1==game_history.length:#this could never happen because the last action must be type 0
+		if position_index+1==game_history.length:
 			return self.sample_position(game_history, force_uniform)
 		return position_index, position_prob
 
@@ -243,29 +243,34 @@ class ReplayBuffer:
 		Generate targets for every unroll steps.
 		only generate for actions with type 0
 		for type 1, all target are None, and will not count to loss in training.
-		#another idea: value: the same, reward: 0, policy: uniform
+		#another idea: value: the same function, reward: 0, policy: uniform
 		#this may improve quality of dynamics model
 		"""
 		target_values, target_rewards, target_policies, actions = [], [], [], []
-		def append_none(action):
-			actions.append(action)
-		append_none(1)
 		### todo: ensure data processing is all right
+		#現在應該是正確的
+		target_values.append(self.compute_target_value(game_history, state_index))
+		target_policies.append(game_history.child_visits[state_index])
+		#for initial reference
 		for current_index in range(
-			state_index+1, state_index + self.config.num_unroll_steps + 1
+			state_index+1, state_index + self.config.num_unroll_steps + 1#+1 to +num_unroll_steps
 		):
 			if current_index < game_history.length and game_history.type_history[current_index]==1:
-				append_none(game_history.action_history[current_index])
+				actions.append(game_history.action_history[current_index])
 				continue
 			value = self.compute_target_value(game_history, current_index)
 			if current_index < game_history.length-1:
+				actions.append(game_history.action_history[current_index])
+				target_rewards.append(game_history.reward_history[current_index])
+
 				target_values.append(value)
-				target_rewards.append(game_history.reward_history[current_index])
 				target_policies.append(game_history.child_visits[current_index])
-				actions.append(game_history.action_history[current_index])#actions[0] is not used, so trainer.update_weights start recurrent inference from actions[1]
 			elif current_index == game_history.length-1:
-				target_values.append(0)
+				#The game has ended, so value and policy are just the value of dummy.
+				actions.append(game_history.action_history[current_index])
 				target_rewards.append(game_history.reward_history[current_index])
+
+				target_values.append(0)
 				# Uniform policy
 				target_policies.append(
 					[
@@ -273,7 +278,6 @@ class ReplayBuffer:
 						for _ in self.config.action_space_type0
 					]
 				)
-				actions.append(game_history.action_history[current_index])
 			else:
 				if current_index%2==1:
 					# States past the end of games are treated as absorbing states
