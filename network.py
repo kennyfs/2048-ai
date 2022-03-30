@@ -549,7 +549,8 @@ class ResNetNetwork(AbstractNetwork):
 QueueItem=collections.namedtuple("QueueItem",['inputs','future'])
 class Manager:
 	'''
-	Queuing requests of network prediction, and run them simultaneously to improve efficiency
+	Queuing requests of network prediction, and run them together to improve efficiency
+	I really feel the difference
 	
 	input to each network for a single prediction should be in [*expected_shape], rather than [batch_size(1),*expected_shape]
 		process in self.prediction_worker
@@ -570,7 +571,9 @@ class Manager:
 			self.prediction_queue=asyncio.queues.Queue(config.model_max_threads)
 			
 			self.coroutine_list=[self.prediction_worker()]
-	async def push_queue(self, features, network:str):#network means which to use. If passing string consumes too much time, pass int instead.
+		else:
+			self.coroutine_list=[]
+	async def push_queue(self, features:np.array, network:str):#network means which to use. If passing string consumes too much time, pass int instead.
 		if self.queue:
 			future=self.loop.create_future()
 			item=QueueItem(features,future)
@@ -584,25 +587,32 @@ class Manager:
 				raise NotImplementedError
 			return future
 		else:
+			features=np.expand_dims(features,axis=0)
 			with tf.device('/device:GPU:0'):
 				if network=='representation':
 					ret=self.representation(features)
+					return ret[0]
 				elif network=='dynamics':
 					ret=self.dynamics(features)
+					return ret[0][0],support_to_scalar(ret[1],self.support)[0]
 				elif network=='prediction':
 					ret=self.prediction(features)
+					return ret[0][0],support_to_scalar(ret[1],self.support)[0]
 				### 要檢查tensorflow keras能不能處理沒有batch_size維度的輸入
 				else:
 					raise NotImplementedError
-				return ret
 	def add_coroutine_list(self,toadd):
 		#if toadd not in self.coroutine_list:
 		self.coroutine_list.append(toadd)
 			
 	def run_coroutine_list(self):
 		ret=self.loop.run_until_complete(asyncio.gather(*(self.coroutine_list)))
-		self.coroutine_list=[self.prediction_worker()]
-		return ret[1:]
+		if self.queue:
+			self.coroutine_list=[self.prediction_worker()]
+			return ret[1:]
+		else:
+			self.coroutine_list=[]
+			return ret
 	def are_all_queues_empty(self):
 		for q in (self.representation_queue,self.dynamics_queue,self.prediction_queue):
 			if not q.empty():
@@ -670,7 +680,7 @@ class Predictor:
 			await future
 			return future.result()
 		else:
-			return self.push_queue(inputs,network)
+			return await self.push_queue(inputs,network)
 	async def initial_inference(self,observation)->NetworkOutput:
 		'''
 		input shape:

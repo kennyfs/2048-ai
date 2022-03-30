@@ -123,13 +123,13 @@ class Config:
 		self.replay_buffer_size=1000
 
 		#overall hyperparameters
-		self.training_steps_to_selfplay_steps_ratio=0.3
+		self.training_steps_to_selfplay_steps_ratio=0.5
 		self.reanalyze_games_to_selfplay_games_ratio=0.8
 		self.selfplay_games_to_test_games_ratio=0.1
-		self.selfplay_games_per_run=10
+		self.selfplay_games_per_run=5
 
 		#manager config
-		self.manager_queue=False
+		self.manager_queue=True
 def default_config():
 	return Config(
 		max_moves=1000000,#it can be infinity because any 2048 game is bound to end

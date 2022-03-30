@@ -110,13 +110,13 @@ class Trainer:
 
 		# observation_batch: batch, channels, height, width
 		# action_batch: batch, num_unroll_steps
-		# target_value: batch, num_unroll_steps/2
-		# target_reward: batch, num_unroll_steps/2
-		# target_policy: batch, num_unroll_steps/2, action_space_size
+		# target_value: batch, num_unroll_steps/2+1 #+1 for the those of initial reference
+		# target_reward: batch, num_unroll_steps/2+1
+		# target_policy: batch, num_unroll_steps/2+1, action_space_size
 		target_value_batch = network.scalar_to_support(target_value_batch, self.config.support)
 		target_reward_batch = network.scalar_to_support(target_reward_batch, self.config.support)
-		# target_value: batch, num_unroll_steps/2, 2*support+1
-		# target_reward: batch, num_unroll_steps/2, 2*support+1
+		# target_value: batch, num_unroll_steps/2+1, 2*support+1
+		# target_reward: batch, num_unroll_steps/2+1, 2*support+1
 		class tmp:#I don't know better solution
 			def __init__(self, value=None):
 				self.value=value
@@ -135,7 +135,7 @@ class Trainer:
 			value=output.value
 			reward=np.zeros_like(value)
 			policy_logits=output.policy
-			predictions = []#type 0
+			predictions = [(value, reward, policy_logits)]
 			for i in range(0, action_batch.shape[1],2):### start to check data processing here
 				hidden_state = self.model.recurrent_inference(
 					hidden_state, action_batch[:, i]
@@ -151,7 +151,7 @@ class Trainer:
 				# Scale the gradient at the start of the dynamics function (See paper appendix Training)
 				hidden_state=scale_gradient(hidden_state, 0.5)
 				predictions.append((value, reward, policy_logits))
-			assert len(predictions)==num_unroll_steps/2+1
+			assert len(predictions)==num_unroll_steps/2+1,f'len(predictions):{len(predictions)}\nnum_unroll_steps:{num_unroll_steps}'
 			#maybe there should be more assertion
 			
 			#predictions[t]=output at time t*2

@@ -177,9 +177,9 @@ class ReplayBuffer:
 			position_prob = position_probs[position_index]
 		else:
 			position_index = np.random.choice(game_history.length)
-		while position_index+1<game_history.length and game_history.type_history[position_index+1]!=0:
+		while position_index<game_history.length and game_history.type_history[position_index]!=0:
 			position_index+=1
-		if position_index+1==game_history.length:
+		if position_index==game_history.length:
 			return self.sample_position(game_history, force_uniform)
 		return position_index, position_prob
 
@@ -292,7 +292,6 @@ class ReplayBuffer:
 						]
 					)
 				actions.append(np.random.choice(self.config.action_space_type0))
-
 		return 	(np.array(target_values,dtype=np.float32),
 				np.array(target_rewards,dtype=np.float32),
 				np.array(target_policies,dtype=np.float32),
