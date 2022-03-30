@@ -251,6 +251,7 @@ class ReplayBuffer:
 		#現在應該是正確的
 		target_values.append(self.compute_target_value(game_history, state_index))
 		target_policies.append(game_history.child_visits[state_index])
+		target_rewards.append(0)
 		#for initial reference
 		for current_index in range(
 			state_index+1, state_index + self.config.num_unroll_steps + 1#+1 to +num_unroll_steps
@@ -295,7 +296,7 @@ class ReplayBuffer:
 		return 	(np.array(target_values,dtype=np.float32),
 				np.array(target_rewards,dtype=np.float32),
 				np.array(target_policies,dtype=np.float32),
-				np.array(actions,dtype=np.float32))
+				np.array(actions,dtype=np.int32))
 
 class Reanalyze:
 	"""

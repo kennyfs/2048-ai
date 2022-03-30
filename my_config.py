@@ -28,25 +28,27 @@ class Config:
 				visit_softmax_temperature_fn,
 				known_bounds=None,
 				save_game_to_file=True):
-		### Self-Play
+		###Game imformation
+		self.board_size=board_size
 		self.action_space_type0=list(range(4))
 		self.action_space_type1=list(range(4,4+2*board_size**2))
-		self.type1_p=np.array([0]*4+[9]*board_size**2+[1]*board_size**2,dtype='float32')
-		self.type1_p/=np.sum(self.type1_p)#used in MCTS 
+		self.type1_p=np.array([0]*4+[9]*board_size**2+[1]*board_size**2,dtype=np.float32)
+		self.type1_p/=np.sum(self.type1_p)#used in MCTS initializing type 1 nodes' policy
+		### Self-Play
 		self.num_actors=num_actors
-		self.board_size=board_size
-
+		self.save_game_to_file=save_game_to_file
+		#not used now, as parallel selfplay is too hard to implement with queuing manager
+		self.max_moves=max_moves#selfplay games are forced to terminate after max_moves
+		# MCTS
 		self.visit_softmax_temperature_fn=visit_softmax_temperature_fn
-		self.max_moves=max_moves
-		self.num_simulations=num_simulations
-		self.discount=discount
+		self.num_simulations=num_simulations#MCTS search times
+		self.discount=discount#used in MCTS backpropagate and replaybuffer target value
 		self.search_threads=search_threads
-		self.model_max_threads=model_max_threads
+		self.model_max_threads=model_max_threads#for manager
 		# Root prior exploration noise.
 		self.if_add_exploration_noise=if_add_exploration_noise
 		self.root_dirichlet_alpha=dirichlet_alpha
 		self.root_exploration_fraction=0.25
-		self.observation_shape=(self.board_size**2,self.board_size,self.board_size)
 		# UCB formula
 		self.pb_c_base=19652
 		self.pb_c_init=1.25
@@ -57,6 +59,7 @@ class Config:
 		# AlphaZero in board games.
 		self.known_bounds=known_bounds
 		### Network info
+		self.observation_shape=(self.board_size**2,self.board_size,self.board_size)
 		self.observation_channels=self.board_size**2
 		self.network_type='fullyconnected'#'resnet'/'fullyconnected'/...
 		self.support=100# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
@@ -76,10 +79,10 @@ class Config:
 		#ResNet Network
 		self.num_channels=128
 		self.num_blocks=10
-		self.reduced_channels_value=1
+		self.reduced_channels_value=1#conv1x1 planes following hidden_state
 		self.reduced_channels_policy=2
 		self.reduced_channels_reward=1
-		self.value_layers=[256]
+		self.value_layers=[256]# dense layer sizes following conv1x1 and flatten
 		self.policy_layers=[]
 		self.reward_layers=[256]
 		
@@ -89,24 +92,21 @@ class Config:
 		self.checkpoint_interval=int(5e2)
 		self.window_size=int(1e6)#max game cnt stored in replaybuffer
 		self.batch_size=batch_size
-		self.num_unroll_steps=10
-		self.optimizer='SGD'
-		self.value_loss_weight=0.5#See paper appendix H Reanalyze
-		self.steps_per_batch=10
-		self.save_model=True
-		
-		#count adding(type 1), but not count them as network training target
+		self.num_unroll_steps=10#for each gamepos chosen to be collected, go forward num_unroll_steps steps(for training dynamics)
 		self.td_steps=td_steps
-
-		self.weight_decay=1e-4
+		self.optimizer='SGD'
 		self.momentum=0.9
+		self.loss_weights=[0.25,1,1]#See paper appendix H Reanalyze
+		#value reward policy
+		self.training_steps_per_batch=10
+		self.save_model=True
+		#self.weight_decay=1e-4 #useless for now
 
 		#Exponential learning rate schedule
 		self.learning_rate_init=lr_init
 		self.learning_rate_decay_rate=0.9
 		self.learning_rate_decay_steps=lr_decay_steps
 
-		self.save_game_to_file=save_game_to_file
 		self.seed=None
 
 		self.PER=True
@@ -115,13 +115,14 @@ class Config:
 		self.debug=False
 		self.reanalyze=True#Using latest model's predcition for value to improve quality of value target(Appendix H)
 
-		#log
-		self.test_delay=0
-		self.log_delay=2.0
+		#log(not used)
+		#self.test_delay=0
+		#self.log_delay=2.0
 
 
 		self.replay_buffer_size=1000
-		#overall hyperparameter
+
+		#overall hyperparameters
 		self.training_steps_to_selfplay_steps_ratio=0.3
 		self.reanalyze_games_to_selfplay_games_ratio=0.8
 		self.selfplay_games_to_test_games_ratio=0.1

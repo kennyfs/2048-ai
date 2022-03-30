@@ -103,19 +103,20 @@ class Trainer:
 		for b in batch:
 			print(b.shape)
 		batchsize=action_batch.shape[0]
+		num_unroll_steps=action_batch.shape[1]
 		# Keep values as scalars for calculating the priorities for the prioritized replay
 		target_value_scalar = np.copy(target_value_batch)
 		priorities = np.zeros_like(target_value_scalar)
 
 		# observation_batch: batch, channels, height, width
-		# action_batch: batch, num_unroll_steps+1
-		# target_value: batch, num_unroll_steps+1
-		# target_reward: batch, num_unroll_steps+1
-		# target_policy: batch, num_unroll_steps+1, len(action_space)
+		# action_batch: batch, num_unroll_steps
+		# target_value: batch, num_unroll_steps/2
+		# target_reward: batch, num_unroll_steps/2
+		# target_policy: batch, num_unroll_steps/2, action_space_size
 		target_value_batch = network.scalar_to_support(target_value_batch, self.config.support)
 		target_reward_batch = network.scalar_to_support(target_reward_batch, self.config.support)
-		# target_value: batch, num_unroll_steps+1, 2*support+1
-		# target_reward: batch, num_unroll_steps+1, 2*support+1
+		# target_value: batch, num_unroll_steps/2, 2*support+1
+		# target_reward: batch, num_unroll_steps/2, 2*support+1
 		class tmp:#I don't know better solution
 			def __init__(self, value=None):
 				self.value=value
@@ -129,13 +130,13 @@ class Trainer:
 		def loss_fn():
 			output=self.model.initial_inference(
 				observation_batch
-			)
+			)#defined as time 0
 			hidden_state=output.hidden_state
 			value=output.value
 			reward=np.zeros_like(value)
 			policy_logits=output.policy
 			predictions = []#type 0
-			for i in range(1, action_batch.shape[1],2):### start to check data processing here
+			for i in range(0, action_batch.shape[1],2):### start to check data processing here
 				hidden_state = self.model.recurrent_inference(
 					hidden_state, action_batch[:, i]
 				).hidden_state
@@ -150,7 +151,11 @@ class Trainer:
 				# Scale the gradient at the start of the dynamics function (See paper appendix Training)
 				hidden_state=scale_gradient(hidden_state, 0.5)
 				predictions.append((value, reward, policy_logits))
-			# predictions: num_unroll_steps+1, 3, batch, 2*support+1 | 2*support+1 | 9 (according to the 2nd dim)
+			assert len(predictions)==num_unroll_steps/2+1
+			#maybe there should be more assertion
+			
+			#predictions[t]=output at time t*2
+			# predictions: num_unroll_steps/2+1, 3, (batch, (2*support+1 | 2*support+1 | 9)) (according to the 2nd dim)
 			total_value_loss,total_reward_loss,total_policy_loss=tf.zeros((batchsize)),tf.zeros((batchsize)),tf.zeros((batchsize))
 			# shape of losses: batchsize
 			for i, prediction in enumerate(predictions):
@@ -163,20 +168,21 @@ class Trainer:
 					total_value_loss+=value_loss
 					total_policy_loss+=policy_loss
 				else:
-					total_value_loss+=scale_gradient(value_loss, 1.0/(len(predictions)-1))
-					total_reward_loss+=scale_gradient(reward_loss, 1.0/(len(predictions)-1))
-					total_policy_loss+=scale_gradient(policy_loss, 1.0/(len(predictions)-1))
+					total_value_loss+=scale_gradient(value_loss, 1.0/(num_unroll_steps/2-1))
+					total_reward_loss+=scale_gradient(reward_loss, 1.0/(num_unroll_steps/2-1))
+					total_policy_loss+=scale_gradient(policy_loss, 1.0/(num_unroll_steps/2-1))
 				pred_value_scalar = network.support_to_scalar(value, self.config.support)
 				priorities[:, i] = (
 					np.abs(pred_value_scalar - target_value_scalar[:, i])
 					** self.config.PER_alpha
 				)
 			# Scale the value loss, paper recommends by 0.25 (See paper appendix Reanalyze)
-			loss = total_value_loss * self.config.value_loss_weight + total_reward_loss + total_policy_loss*1.5
+			loss = total_value_loss * self.config.loss_weights[0] + total_reward_loss * self.config.loss_weights[1] + total_policy_loss * self.config.loss_weights[2]
 			if self.config.PER:
 				# Correct PER bias by using importance-sampling (IS) weights
+				# this is why value_loss*weight+reward_loss+policy_loss != total_loss
 				loss *= weight_batch
-			# (Deepmind's pseudocode do a sum, and werner-duvaud/muzero-general do a mean. Both are the same.) 
+			# (Deepmind's pseudocode do sum, and werner-duvaud/muzero-general do mean. Both are the same.) 
 			loss=tf.math.reduce_mean(loss)#now loss is a scalar
 			last_loss.set(loss.numpy())
 			last_value_loss.set(tf.math.reduce_mean(total_value_loss).numpy())
@@ -185,7 +191,7 @@ class Trainer:
 			return loss
 
 		# Optimize
-		for _ in range(self.config.steps_per_batch):
+		for _ in range(self.config.training_steps_per_batch):
 			self.optimizer.minimize(loss_fn,self.model.trainable_variables)
 			self.training_step += 1
 			if self.training_step % self.config.checkpoint_interval == 0:

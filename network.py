@@ -165,7 +165,11 @@ class AbstractNetwork(ABC):
 		#hidden state is scaled
 		#reward is in logits
 		pass
-		
+
+	@abstractmethod
+	def dynamics_for_manager(self, inputs):
+		pass
+
 	@abstractmethod
 	def prediction(self, hidden_state):
 		#output: policy,value
@@ -553,31 +557,44 @@ class Manager:
 	'''
 	def __init__(self, config, model:AbstractNetwork):
 		self.support=config.support
-		
+		self.queue=config.manager_queue
 		self.loop=asyncio.get_event_loop()
 		#callable model
 		self.model=model
 		self.representation=model.representation
 		self.dynamics=model.dynamics_for_manager
 		self.prediction=model.prediction
-		self.representation_queue=asyncio.queues.Queue(config.model_max_threads)
-		self.dynamics_queue=asyncio.queues.Queue(config.model_max_threads)
-		self.prediction_queue=asyncio.queues.Queue(config.model_max_threads)
-		
-		self.coroutine_list=[self.prediction_worker()]
+		if self.queue:
+			self.representation_queue=asyncio.queues.Queue(config.model_max_threads)
+			self.dynamics_queue=asyncio.queues.Queue(config.model_max_threads)
+			self.prediction_queue=asyncio.queues.Queue(config.model_max_threads)
+			
+			self.coroutine_list=[self.prediction_worker()]
 	async def push_queue(self, features, network:str):#network means which to use. If passing string consumes too much time, pass int instead.
-		future=self.loop.create_future()
-		item=QueueItem(features,future)
-		if network=='representation':
-			await self.representation_queue.put(item)
-		elif network=='dynamics':
-			await self.dynamics_queue.put(item)
-		elif network=='prediction':
-			await self.prediction_queue.put(item)
+		if self.queue:
+			future=self.loop.create_future()
+			item=QueueItem(features,future)
+			if network=='representation':
+				await self.representation_queue.put(item)
+			elif network=='dynamics':
+				await self.dynamics_queue.put(item)
+			elif network=='prediction':
+				await self.prediction_queue.put(item)
+			else:
+				raise NotImplementedError
+			return future
 		else:
-			raise NotImplementedError
-		return future
-		
+			with tf.device('/device:GPU:0'):
+				if network=='representation':
+					ret=self.representation(features)
+				elif network=='dynamics':
+					ret=self.dynamics(features)
+				elif network=='prediction':
+					ret=self.prediction(features)
+				### 要檢查tensorflow keras能不能處理沒有batch_size維度的輸入
+				else:
+					raise NotImplementedError
+				return ret
 	def add_coroutine_list(self,toadd):
 		#if toadd not in self.coroutine_list:
 		self.coroutine_list.append(toadd)
@@ -642,15 +659,18 @@ class Predictor:
 	'''
 	def __init__(self,manager:Manager,config:my_config.Config):
 		self.mode=config.network_type#'resnet'/'fullyconnected'/...
+		self.queue=config.manager_queue
 		self.manager=manager
 		self.push_queue=manager.push_queue
 		self.config=config
 		
 	async def get_outputs(self,inputs,network):
-		future=await self.push_queue(inputs,network)
-		await future
-		return future.result()
-		
+		if self.queue:
+			future=await self.push_queue(inputs,network)
+			await future
+			return future.result()
+		else:
+			return self.push_queue(inputs,network)
 	async def initial_inference(self,observation)->NetworkOutput:
 		'''
 		input shape:
