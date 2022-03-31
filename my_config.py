@@ -61,7 +61,7 @@ class Config:
 		### Network info
 		self.observation_shape=(self.board_size**2,self.board_size,self.board_size)
 		self.observation_channels=self.board_size**2
-		self.network_type='fullyconnected'#'resnet'/'fullyconnected'/...
+		self.network_type='resnet'#'resnet'/'fullyconnected'/...
 		self.support=100# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
 		#this = 0 means not using support. Muzero uses 300, which can represent up to 90000.
 		
@@ -88,6 +88,9 @@ class Config:
 		
 		### Training
 		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
+		self.game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games", 'resnet')
+		#change dir if you want
+		#haven't change game loading path in replay_buffer.py
 		self.training_steps=int(100e3)
 		self.checkpoint_interval=int(5e2)
 		self.window_size=int(1e6)#max game cnt stored in replaybuffer
@@ -96,7 +99,7 @@ class Config:
 		self.td_steps=td_steps
 		self.optimizer='SGD'
 		self.momentum=0.9
-		self.loss_weights=[0.25,1,1]#See paper appendix H Reanalyze
+		self.loss_weights=[0.2,0.3,1]#See paper appendix H Reanalyze
 		#value reward policy
 		self.training_steps_per_batch=10
 		self.save_model=True
@@ -123,7 +126,7 @@ class Config:
 		self.replay_buffer_size=1000
 
 		#overall hyperparameters
-		self.training_steps_to_selfplay_steps_ratio=0.5
+		self.training_steps_to_selfplay_steps_ratio=0.05
 		self.reanalyze_games_to_selfplay_games_ratio=0.8
 		self.selfplay_games_to_test_games_ratio=0.1
 		self.selfplay_games_per_run=5

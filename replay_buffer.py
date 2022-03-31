@@ -1,4 +1,5 @@
 import copy
+import os
 import time
 
 import numpy as np
@@ -62,7 +63,7 @@ class ReplayBuffer:
 			del self.buffer[del_id]
 
 		if self.config.save_game_to_file and save_to_file:
-			game_history.save(f'saved_games/{self.num_played_games}.record')
+			game_history.save(os.path.join(self.config.game_dir, f'{self.num_played_games}.record'))
 	def get_info(self):
 		return {"num_played_games":self.num_played_games,"num_played_steps":self.num_played_steps}
 	def load_games(self, first_game_id, length):

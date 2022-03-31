@@ -180,7 +180,8 @@ class MCTS:
 			legal_actions,
 			now_type,#is for next action
 			add_exploration_noise,
-			override_root_with=None):
+			override_root_with=None,
+			debug=True):
 		"""
 		At the root of the search tree we use the representation function to obtain a
 		hidden state given the current observation.
@@ -207,7 +208,8 @@ class MCTS:
 					flag=0
 					break
 			assert flag, f'Legal actions should be a subset of the action space. Got {legal_actions}'
-
+			if debug:
+				print(f'reward:{reward}\nroot_predicted_value:{root_predicted_value}')
 			root.expand(
 				legal_actions,
 				now_type,

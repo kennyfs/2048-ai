@@ -82,6 +82,8 @@ class Trainer:
 			)
 			shared_storage.append_loss(total_loss,value_loss,reward_loss,policy_loss)
 			# Managing the self-play / training ratio
+		shared_storage.save_weights(copy.deepcopy(self.model.get_weights()))
+		shared_storage.save()
 		# loss log:
 		# clear losses saved in shared storage when training start. 
 		# train until training to selfplay steps ratio is up to the config.
