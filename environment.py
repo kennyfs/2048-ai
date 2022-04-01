@@ -104,7 +104,7 @@ class Environment:
 		for i in self.grid:
 			for j in i:
 				if j>0:
-					print(bg+{1:'252'+end+word+'234',2:'222'+end+word+'234',3:'208',4:'202',5:'166',6:'196',7:'227',8:'190',9:'184',10:'184',11:'220',12:'14',}[j]+end+'%3d'%2**j+reset,end='')
+					print(bg+{1:'252'+end+word+'234',2:'222'+end+word+'234',3:'208',4:'202',5:'166',6:'196',7:'227'+end+word+'234',8:'190'+end+word+'234',9:'184',10:'184',11:'220',12:'14',}[j]+end+'%3d'%2**j+reset,end='')
 				else:
 					print('   ',end='')
 				print('|',end='')

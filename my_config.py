@@ -79,9 +79,9 @@ class Config:
 		#ResNet Network
 		self.num_channels=128
 		self.num_blocks=10
-		self.reduced_channels_value=1#conv1x1 planes following hidden_state
-		self.reduced_channels_policy=2
-		self.reduced_channels_reward=1
+		self.reduced_channels_value=16#conv1x1 planes following hidden_state
+		self.reduced_channels_policy=8
+		self.reduced_channels_reward=16
 		self.value_layers=[256]# dense layer sizes following conv1x1 and flatten
 		self.policy_layers=[]
 		self.reward_layers=[256]
@@ -99,7 +99,7 @@ class Config:
 		self.td_steps=td_steps
 		self.optimizer='SGD'
 		self.momentum=0.9
-		self.loss_weights=[0.2,0.3,1]#See paper appendix H Reanalyze
+		self.loss_weights=[0.15,0.8,1]#See paper appendix H Reanalyze
 		#value reward policy
 		self.training_steps_per_batch=10
 		self.save_model=True
@@ -126,7 +126,7 @@ class Config:
 		self.replay_buffer_size=1000
 
 		#overall hyperparameters
-		self.training_steps_to_selfplay_steps_ratio=0.05
+		self.training_steps_to_selfplay_steps_ratio=0.12
 		self.reanalyze_games_to_selfplay_games_ratio=0.8
 		self.selfplay_games_to_test_games_ratio=0.1
 		self.selfplay_games_per_run=5

@@ -33,6 +33,8 @@ class ReplayBuffer:
 		np.random.seed(self.config.seed)
 
 	def save_game(self, game_history, save_to_file=True):
+		#error seems to be somewhere in this function
+		print('save_game1')
 		if self.config.PER:
 			if game_history.priorities is not None:
 				# Avoid read only array when loading replay buffer from disk
@@ -51,7 +53,7 @@ class ReplayBuffer:
 
 				game_history.priorities = np.array(priorities, dtype="float32")
 				game_history.game_priority = np.max(game_history.priorities)
-
+		print('save_game2')
 		self.buffer[self.num_played_games] = game_history
 		self.num_played_games += 1
 		self.num_played_steps += game_history.length
@@ -62,14 +64,16 @@ class ReplayBuffer:
 			self.total_samples -= self.buffer[del_id].length
 			del self.buffer[del_id]
 
+		print('save_game3')
 		if self.config.save_game_to_file and save_to_file:
 			game_history.save(os.path.join(self.config.game_dir, f'{self.num_played_games}.record'))
+		print('save_game4')
 	def get_info(self):
 		return {"num_played_games":self.num_played_games,"num_played_steps":self.num_played_steps}
-	def load_games(self, first_game_id, length):
+	def load_games(self, first_game_id, length, path):
 		for i in range(first_game_id, first_game_id+length):
 			game_history=self_play.GameHistory()
-			game_history.load(f'saved_games/{i}.record',self.config)
+			game_history.load(f'{path}/{i}.record',self.config)
 			self.save_game(game_history, save_to_file=False)
 	def get_buffer(self):
 		return self.buffer

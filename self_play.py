@@ -208,13 +208,14 @@ class MCTS:
 					flag=0
 					break
 			assert flag, f'Legal actions should be a subset of the action space. Got {legal_actions}'
+			policy=tf.nn.softmax(policy_logits)
 			if debug:
-				print(f'reward:{reward}\nroot_predicted_value:{root_predicted_value}')
+				print(f'reward:{reward}\nroot_predicted_value:{root_predicted_value}\npolicy:{policy}')
 			root.expand(
 				legal_actions,
 				now_type,
 				reward,
-				policy_logits,
+				policy,
 				hidden_state,
 			)
 
@@ -265,7 +266,7 @@ class MCTS:
 				actions,
 				now_type,
 				output.reward,
-				output.policy if now_type==0 else self.config.type1_p,
+				tf.nn.softmax(output.policy) if now_type==0 else self.config.type1_p,
 				output.hidden_state,
 			)
 			self.backpropagate(search_path, output.value, now_type, min_max_stats)
@@ -437,13 +438,16 @@ class SelfPlay:
 		while total<self.config.selfplay_games_per_run:
 			#self.predictor.manager.set_weights(ray.get(shared_storage.get_info("weights")))
 
+			print('flag self_play1')
 			game_history=self.play_game(
 				self.config.visit_softmax_temperature_fn(
 					training_steps=shared_storage.get_info("training_step")
 				),
 				True,### if you want to render, change this
 			)
-			ray.get(replay_buffer.save_game.remote(game_history))
+			print('flag self_play2')
+			ray.get(replay_buffer.save_game.remote(game_history))#error seems to be here
+			print('flag self_play3')
 			total+=1
 	
 	def play_game(self, temperature, render, game_id:int=-5):#for this single game, seed should be self.seed+game_id
@@ -475,6 +479,7 @@ class SelfPlay:
 			game.render()
 		assert game.now_type==0
 		while not done and len(game_history.action_history) <= self.config.max_moves:
+			print('flag play_game1')
 			if game.now_type==0:
 				assert (
 					len(np.array(observation).shape) == 3
@@ -529,6 +534,8 @@ class SelfPlay:
 					game.render()
 			done=game.finish()
 			print(len(game_history.root_values))
+			print('flag play_game2')
+		print('flag play_game3')
 		return game_history
 
 	def close_game(self):

@@ -32,14 +32,13 @@ def support_to_scalar(logits, support_size, from_logits=True):# logits is in sha
 	"""
 	# Decode to a scalar
 	if from_logits:
-		probabilities=tf.nn.softmax(logits)
+		probabilities=tf.nn.softmax(logits,axis=0)
 	else:
 		probabilities=logits
-	support=tf.range(-support_size,support_size+1,delta=1,dtype=tf.float32) # in shape (1,full_support_size)
-	support=tf.expand_dims(support,axis=0)
+	support=tf.range(-support_size,support_size+1,delta=1,dtype=tf.float32)
+	support=tf.expand_dims(support,axis=0)# in shape (1,full_support_size)
 	support=tf.tile(support,(probabilities.shape[0],1))
 	x = tf.reduce_sum(support * probabilities, axis=1)
-
 	# Invert the scaling (defined in https://arxiv.org/abs/1805.11593)
 	x = tf.math.sign(x) * (
 		((tf.math.sqrt(1 + 4 * 0.001 * (tf.math.abs(x) + 1 + 0.001)) - 1) / (2 * 0.001))
@@ -47,7 +46,7 @@ def support_to_scalar(logits, support_size, from_logits=True):# logits is in sha
 		- 1
 	)
 	return x
-def scalar_to_support(x, support_size):####todo: implement
+def scalar_to_support(x, support_size):
 	"""
 	Transform a scalar to a categorical representation with (2 * support_size + 1) categories
 	See paper appendix Network Architecture
@@ -95,10 +94,10 @@ def action_to_onehot(action, board_size, matrix=False):
 		else:
 			x,y,num=environment.add_action_to_pos(action,board_size)
 			num-=1
-			ret[4+num,x,y]=1
+			ret[4+num,x,y]=1.
 	else:
 		ret=np.zeros((4+2*board_size**2),dtype=np.float32)
-		ret[action]=1
+		ret[action]=1.
 	return ret
 def batch_action_to_onehot(action_batch, board_size, matrix=False):
 	batch_size=action_batch.shape[0]
@@ -358,7 +357,7 @@ class FullyConnectedNetwork(AbstractNetwork):
 		for model in self.representation_model,self.dynamics_model,self.prediction_model:
 			stringlist = []
 			model.summary(print_fn=lambda x: stringlist.append(x))
-			ret += "\n".join(stringlist)
+			ret += "\n".join(stringlist)+'\n-----------------------------\n'
 		return ret
 
 ###### End Fully Connected #######
@@ -371,8 +370,9 @@ def conv3x3(out_channels, stride=1):
 	return tf.keras.layers.Conv2D(out_channels, kernel_size=3, strides=stride, padding='same', use_bias=False, data_format='channels_first')
 def conv1x1(out_channels, stride=1):
 	return tf.keras.layers.Conv2D(out_channels, kernel_size=1, strides=stride, padding='same', use_bias=False, data_format='channels_first')
-class ResidualBlock:
+class ResidualBlock(tf.keras.Model):
 	def __init__(self, num_channels):
+		super().__init__()
 		self.conv1 = conv3x3(num_channels, num_channels)
 		self.conv2 = conv3x3(num_channels, num_channels)
 		self.bn1 = tf.keras.layers.BatchNormalization()
