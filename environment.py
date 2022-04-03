@@ -157,7 +157,11 @@ class Environment:
 		result=[]
 		for i in range(1,self.board_size**2+1):#board_size**2 is max possible tile
 			result.append(np.where(grid==i,1.0,0.0))
-		return np.array(result)
+		if self.now_type==1:
+			result.append(np.ones((self.board_size,self.board_size)))
+		else:
+			result.append(np.zeros((self.board_size,self.board_size)))
+		return np.array(result,dtype=np.float32)
 		'''
 		#alternative:
 		6*10^3 times per second

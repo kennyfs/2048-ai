@@ -102,6 +102,7 @@ class MuZero:
 			"value_loss": 0,
 			"reward_loss": 0,
 			"policy_loss": 0,
+			"l2_loss": 0,
 			"num_played_games": 0,
 			"num_played_steps": 0,
 			"num_reanalyzed_games": 0,
@@ -235,6 +236,7 @@ class MuZero:
 				"value_loss",
 				"reward_loss",
 				"policy_loss",
+				"l2_loss",
 				#from self_play_worker, not too important
 				"num_played_games",
 				"num_played_steps",
@@ -263,7 +265,7 @@ class MuZero:
 			log_training_config=1
 			if log_training_config==1:
 				#log all loss
-				for total_loss,value_loss,reward_loss,policy_loss in zip(info["total_loss"],info["value_loss"],info["reward_loss"],info["policy_loss"]):
+				for total_loss,value_loss,reward_loss,policy_loss,l2_loss in zip(info["total_loss"],info["value_loss"],info["reward_loss"],info["policy_loss"],info["l2_loss"]):
 					#tf.summary.scalar(
 					#	"3.Trainer_worker/1.training_step", training_step, training_counter,
 					#)
@@ -281,6 +283,9 @@ class MuZero:
 					)
 					tf.summary.scalar(
 						"3.Trainer_worker/4.policy_loss", policy_loss, training_counter
+					)
+					tf.summary.scalar(
+						"3.Trainer_worker/5.l2_loss", l2_loss, training_counter
 					)
 					training_counter+=1
 			elif log_training_config==2:

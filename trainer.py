@@ -30,6 +30,7 @@ class Trainer:
 		self.model.set_weights(copy.deepcopy(initial_checkpoint["weights"]))
 		'''
 		self.training_step = initial_checkpoint["training_step"]
+		self.l2_weight=config.l2_weight
 
 		# Initialize the optimizer
 		if self.config.optimizer == "SGD":
@@ -46,28 +47,34 @@ class Trainer:
 				f"{self.config.optimizer} is not implemented. You can change the optimizer manually in trainer.py."
 			)
 
-	def run_update_weights(self, replay_buffer, shared_storage):
+	def run_update_weights(self, replay_buffer, shared_storage, max_steps=None):#max_steps is for observing loss
 		# Wait for the replay buffer to be filled
 		assert shared_storage.get_info("num_played_games") > 0, 'no enough games, get 0'
-
+		self.training_step=shared_storage.get_info('training_step')
 		next_batch = replay_buffer.get_batch.remote()
 		# Training loop
 		shared_storage.clear_loss()
+		start_step=self.training_step
 		while (self.training_step / max(
 				1, shared_storage.get_info("num_played_steps"))
 				< self.config.training_steps_to_selfplay_steps_ratio
 				and
 				self.training_step < self.config.training_steps):
+			st=time.time()
 			index_batch, batch = ray.get(next_batch)
+			print(f'generating data consumed {time.time()-st} seconds.')
 			next_batch = replay_buffer.get_batch.remote()
 			self.update_learning_rate()
+			st=time.time()
 			(
 				priorities,
 				total_loss,
 				value_loss,
 				reward_loss,
 				policy_loss,
+				l2_loss,
 			) = self.update_weights(batch, shared_storage)
+			print(f'training consumed {time.time()-st} seconds.')
 
 			if self.config.PER:
 				# Save new priorities in the replay buffer (See https://arxiv.org/abs/1803.00933)
@@ -80,8 +87,11 @@ class Trainer:
 					#"learning_rate": self.optimizer.learning_rate,
 				}
 			)
-			shared_storage.append_loss(total_loss,value_loss,reward_loss,policy_loss)
+			shared_storage.append_loss(total_loss,value_loss,reward_loss,policy_loss,l2_loss)
 			# Managing the self-play / training ratio
+			print(f'ratio:{self.training_step / max(1, shared_storage.get_info("num_played_steps"))}')
+			if max_steps!=None and self.training_step-start_step>=max_steps:
+				break
 		shared_storage.save_weights(copy.deepcopy(self.model.get_weights()))
 		shared_storage.save()
 		# loss log:
@@ -102,8 +112,8 @@ class Trainer:
 			weight_batch,
 		) = batch#batches are all np.array
 		#for debug, check the shape of the batch, maybe is useful
-		for b in batch:
-			print(b.shape)
+		#for b in batch:
+		#	print(b.shape)
 		batchsize=action_batch.shape[0]
 		num_unroll_steps=action_batch.shape[1]
 		# Keep values as scalars for calculating the priorities for the prioritized replay
@@ -115,10 +125,19 @@ class Trainer:
 		# target_value: batch, num_unroll_steps/2+1 #+1 for the those of initial reference
 		# target_reward: batch, num_unroll_steps/2+1
 		# target_policy: batch, num_unroll_steps/2+1, action_space_size
-		target_value_batch = network.scalar_to_support(target_value_batch, self.config.support)
-		target_reward_batch = network.scalar_to_support(target_reward_batch, self.config.support)
+		if self.config.support:
+			target_value_batch = network.scalar_to_support(target_value_batch, self.config.support)
+			target_reward_batch = network.scalar_to_support(target_reward_batch, self.config.support)
+		else:
+			target_value_batch=np.expand_dims(target_value_batch,axis=-1)
+			target_reward_batch=np.expand_dims(target_reward_batch,axis=-1)
 		# target_value: batch, num_unroll_steps/2+1, 2*support+1
 		# target_reward: batch, num_unroll_steps/2+1, 2*support+1
+
+		# if not using support
+		# target_value: batch, num_unroll_steps/2+1
+		# target_reward: batch, num_unroll_steps/2+1
+
 		class tmp:#I don't know better solution
 			def __init__(self, value=None):
 				self.value=value
@@ -128,6 +147,7 @@ class Trainer:
 		last_value_loss=tmp()
 		last_reward_loss=tmp()
 		last_policy_loss=tmp()
+		last_l2_loss=tmp()
 		## Generate predictions
 		def loss_fn():
 			output=self.model.initial_inference(
@@ -165,7 +185,7 @@ class Trainer:
 				target_value=target_value_batch[:,i,:]
 				target_reward=target_reward_batch[:,i,:]
 				target_policy=target_policy_batch[:,i,:]
-				value_loss, reward_loss, policy_loss = self.loss_function(value,reward,policy_logits,target_value,target_reward,target_policy)
+				value_loss, reward_loss, policy_loss = self.loss_function(value,reward,policy_logits,target_value,target_reward,target_policy,self.config.support!=0)
 				if i==0:
 					total_value_loss+=value_loss
 					total_policy_loss+=policy_loss
@@ -173,23 +193,34 @@ class Trainer:
 					total_value_loss+=scale_gradient(value_loss, 1.0/(num_unroll_steps/2-1))
 					total_reward_loss+=scale_gradient(reward_loss, 1.0/(num_unroll_steps/2-1))
 					total_policy_loss+=scale_gradient(policy_loss, 1.0/(num_unroll_steps/2-1))
-				pred_value_scalar = network.support_to_scalar(value, self.config.support)
+				if self.config.support:
+					pred_value_scalar = network.support_to_scalar(value, self.config.support)
+				else:
+					pred_value_scalar = np.reshape(value,(-1))
 				priorities[:, i] = (
 					np.abs(pred_value_scalar - target_value_scalar[:, i])
 					** self.config.PER_alpha
 				)
 			# Scale the value loss, paper recommends by 0.25 (See paper appendix Reanalyze)
-			loss = total_value_loss * self.config.loss_weights[0] + total_reward_loss * self.config.loss_weights[1] + total_policy_loss * self.config.loss_weights[2]
 			if self.config.PER:
+				total_value_loss *= weight_batch
+				total_reward_loss *= weight_batch
+				total_policy_loss *= weight_batch
+			loss = total_value_loss * self.config.loss_weights[0] + total_reward_loss * self.config.loss_weights[1] + total_policy_loss * self.config.loss_weights[2]
+			'''if self.config.PER:
 				# Correct PER bias by using importance-sampling (IS) weights
 				# this is why value_loss*weight+reward_loss+policy_loss != total_loss
-				loss *= weight_batch
+				loss *= weight_batch'''
+
 			# (Deepmind's pseudocode do sum, and werner-duvaud/muzero-general do mean. Both are the same.) 
 			loss=tf.math.reduce_mean(loss)#now loss is a scalar
+			l2_loss=tf.add_n([tf.nn.l2_loss(v) for v in self.model.trainable_variables])
 			last_loss.set(loss.numpy())
 			last_value_loss.set(tf.math.reduce_mean(total_value_loss).numpy())
 			last_reward_loss.set(tf.math.reduce_mean(total_reward_loss).numpy())
 			last_policy_loss.set(tf.math.reduce_mean(total_policy_loss).numpy())
+			last_l2_loss.set(l2_loss.numpy())
+			loss+=l2_loss*self.l2_weight
 			return loss
 
 		# Optimize
@@ -199,6 +230,11 @@ class Trainer:
 			if self.training_step % self.config.checkpoint_interval == 0:
 				shared_storage.save_weights(copy.deepcopy(self.model.get_weights()))
 				shared_storage.save()
+		print(f'''last_loss:{last_loss.value},
+last_value_loss:{last_value_loss.value},
+last_reward_loss:{last_reward_loss.value},
+last_policy_loss:{last_policy_loss.value},
+last_l2_loss:{last_l2_loss.value}''')
 		return (
 			priorities,
 			# For log purpose
@@ -206,6 +242,7 @@ class Trainer:
 			last_value_loss.value,
 			last_reward_loss.value,
 			last_policy_loss.value,
+			last_l2_loss.value
 		)
 
 	def update_learning_rate(self):
@@ -225,9 +262,14 @@ class Trainer:
 		target_value,
 		target_reward,
 		target_policy,
+		using_support
 	):
 		# Cross-entropy seems to have a better convergence than MSE
-		value_loss = tf.nn.softmax_cross_entropy_with_logits(target_value,value)
-		reward_loss = tf.nn.softmax_cross_entropy_with_logits(target_reward,reward)
+		if using_support:
+			value_loss = tf.nn.softmax_cross_entropy_with_logits(target_value,value)
+			reward_loss = tf.nn.softmax_cross_entropy_with_logits(target_reward,reward)
+		else:
+			value_loss = tf.keras.losses.MeanSquaredError()(target_value,value)
+			reward_loss = tf.keras.losses.MeanSquaredError()(target_reward,reward)
 		policy_loss = tf.nn.softmax_cross_entropy_with_logits(target_policy,policy_logits)
 		return value_loss, reward_loss, policy_loss

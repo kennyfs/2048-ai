@@ -31,6 +31,8 @@ def support_to_scalar(logits, support_size, from_logits=True):# logits is in sha
 	See paper appendix F Network Architecture (P.14)
 	"""
 	# Decode to a scalar
+	if support_size==0:
+		return logits
 	if from_logits:
 		probabilities=tf.nn.softmax(logits,axis=0)
 	else:
@@ -394,15 +396,22 @@ class representation(tf.keras.Model):
 		self.conv=conv3x3(num_channels)
 		self.bn=tf.keras.layers.BatchNormalization()
 		self.relu=tf.keras.layers.ReLU()
-		self.resblock=[ResidualBlock(num_channels) for i in range(num_blocks)]
+		#self.resblock=[ResidualBlock(num_channels) for i in range(num_blocks)]
+		self.resblock=[[conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization(), conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization()]for i in range(num_blocks)]
 		self.build([1]+input_shape)
 
 	def call(self,x):
 		out=self.conv(x)
 		out=self.bn(out)
 		out=self.relu(out)
-		for block in self.resblock:
-			out=block(out)
+		for conv1,bn1,conv2,bn2 in self.resblock:
+			tmpout=conv1(out)
+			tmpout=bn1(tmpout)
+			tmpout=self.relu(tmpout)
+			tmpout=conv2(tmpout)
+			tmpout=bn2(tmpout)
+			out+=tmpout
+			out=self.relu(out)
 		return out
 
 class dynamics(tf.keras.Model):
@@ -417,8 +426,9 @@ class dynamics(tf.keras.Model):
 		self.conv=conv3x3(num_channels)
 		self.bn=tf.keras.layers.BatchNormalization()
 		self.relu=tf.keras.layers.ReLU()
-		self.resblock=[ResidualBlock(num_channels) for i in range(num_blocks)]
-
+		#self.resblock=[ResidualBlock(num_channels) for i in range(num_blocks)]
+		self.resblock=[[conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization(), conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization()]for i in range(num_blocks)]
+		
 		self.conv_reward=conv1x1(reduced_channels_reward)
 		self.bn_reward=tf.keras.layers.BatchNormalization()
 		self.flatten=tf.keras.layers.Flatten()
@@ -429,8 +439,14 @@ class dynamics(tf.keras.Model):
 		out=self.conv(x)
 		out=self.bn(out)
 		out=self.relu(out)
-		for block in self.resblock:
-			out=block(out)
+		for conv1,bn1,conv2,bn2 in self.resblock:
+			tmpout=conv1(out)
+			tmpout=bn1(tmpout)
+			tmpout=self.relu(tmpout)
+			tmpout=conv2(tmpout)
+			tmpout=bn2(tmpout)
+			out+=tmpout
+			out=self.relu(out)
 		hidden_state=out
 		out=self.conv_reward(out)
 		out=self.bn_reward(out)
@@ -477,7 +493,7 @@ class ResNetNetwork(AbstractNetwork):
 		super().__init__()
 		self.config=config
 		self.representation_model=representation(
-			[config.observation_channels, config.board_size, config.board_size],
+			config.observation_shape,
 			config.num_channels,
 			config.num_blocks)
 		self.dynamics_model=dynamics(
@@ -654,6 +670,8 @@ class Manager:
 					assert hidden_state.shape[0]==len(item_list) and reward.shape[0]==len(item_list), 'sizes of hidden_state('+hidden_state.shape+'), reward('+reward.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
 					if self.support:
 						reward=support_to_scalar(reward,self.support)
+					else:
+						reward=tf.reshape(reward,(-1))
 					for i in range(len(item_list)):
 						item_list[i].future.set_result((hidden_state[i],reward[i]))
 				elif name=='prediction':
@@ -661,6 +679,8 @@ class Manager:
 					assert policy.shape[0]==len(item_list) and value.shape[0]==len(item_list), 'sizes of policy('+policy.shape+'), value('+value.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
 					if self.support:
 						value=support_to_scalar(value,self.support)
+					else:
+						value=tf.reshape(value,(-1))
 					for i in range(len(item_list)):
 						item_list[i].future.set_result((policy[i],value[i]))
 class Predictor:

@@ -74,11 +74,12 @@ class SharedStorage:
 			raise TypeError
 
 	def clear_loss(self):
-		for key in "total_loss","value_loss","reward_loss","policy_loss":
+		for key in "total_loss","value_loss","reward_loss","policy_loss",'l2_loss':
 			self.current_checkpoint[key]=[]
 
-	def append_loss(self,total_loss,value_loss,reward_loss,policy_loss):
+	def append_loss(self,total_loss,value_loss,reward_loss,policy_loss,l2_loss):
 		self.current_checkpoint['total_loss'].append(total_loss)
 		self.current_checkpoint['value_loss'].append(value_loss)
 		self.current_checkpoint['reward_loss'].append(reward_loss)
 		self.current_checkpoint['policy_loss'].append(policy_loss)
+		self.current_checkpoint['l2_loss'].append(l2_loss)

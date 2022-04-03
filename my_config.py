@@ -4,7 +4,7 @@ import datetime
 
 def default_visit_softmax_temperature(num_moves=0,training_steps=0):
 	if training_steps < 50e3:
-		return 1.0
+		return 0.75
 	elif training_steps < 75e3:
 		return 0.5
 	else:
@@ -59,8 +59,7 @@ class Config:
 		# AlphaZero in board games.
 		self.known_bounds=known_bounds
 		### Network info
-		self.observation_shape=(self.board_size**2,self.board_size,self.board_size)
-		self.observation_channels=self.board_size**2
+		self.observation_shape=[self.board_size**2+1,self.board_size,self.board_size]
 		self.network_type='resnet'#'resnet'/'fullyconnected'/...
 		self.support=100# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
 		#this = 0 means not using support. Muzero uses 300, which can represent up to 90000.
@@ -100,8 +99,9 @@ class Config:
 		self.optimizer='SGD'
 		self.momentum=0.9
 		self.loss_weights=[0.15,0.8,1]#See paper appendix H Reanalyze
+		self.l2_weight=5e-5
 		#value reward policy
-		self.training_steps_per_batch=10
+		self.training_steps_per_batch=2
 		self.save_model=True
 		#self.weight_decay=1e-4 #useless for now
 
@@ -143,10 +143,10 @@ def default_config():
 		dirichlet_alpha=0.3,
 		num_simulations=100,
 		board_size=4,
-		batch_size=1024,
+		batch_size=256,
 		td_steps=30,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
 		#2048 games tend to be very long
 		num_actors=5,
-		lr_init=0.01,
+		lr_init=2e-5,
 		lr_decay_steps=35e3,
 		visit_softmax_temperature_fn=default_visit_softmax_temperature)

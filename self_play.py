@@ -3,6 +3,7 @@ import collections
 import copy
 from lib2to3.pytree import Base
 import math
+import pickle
 import environment
 import random
 import sys
@@ -120,7 +121,7 @@ class GameHistory:####
 		with open(file,'w') as F:
 			for action,reward,type,visits,value in zip(self.action_history,self.reward_history,self.type_history,self.child_visits,self.root_values):
 				F.write(f'{action} {reward} {type} {visits} {value}\n')
-	def load(self, file, config):
+	def load(self, file, config, predictor=None):
 		#about 60 times per second
 		env=environment.Environment(config)
 		with open(file,'r') as F:
@@ -132,14 +133,27 @@ class GameHistory:####
 				if self.action_history[-1]!=None:
 					reward=env.step(self.action_history[-1])
 				self.observation_history.append(env.get_features())
+
 				last_index=index+1
 				index=line.find(' ',last_index)
-				self.reward_history.append(eval(line[last_index:index]))
-				if reward!=None:
-					assert reward==self.reward_history[-1],f'{reward}!={self.reward_history[-1]}'
+				self.reward_history.append(reward)
+
+				if predictor:#means debug
+					env.render()
+					predictor.manager.add_coroutine_list(predictor.initial_inference(self.observation_history[-1]))
+					if len(self.observation_history)>=2:
+						predictor.manager.add_coroutine_list(predictor.recurrent_inference(self.observation_history[-2],self.action_history[-1]))
+					out=predictor.manager.run_coroutine_list()
+					output=out[0]
+					print(f'value:{output.value}, policy:{tf.nn.softmax(output.policy)}')
+					if len(self.observation_history)>=2:
+						recurrent_output=out[1]
+						print(f'recurrent: value:{recurrent_output.value},reward:{recurrent_output.reward}/{reward}, policy:{tf.nn.softmax(recurrent_output.policy)}\n')
+
 				last_index=index+1
 				index=line.find(' ',last_index)
 				self.type_history.append(eval(line[last_index:index]))
+
 				last_index=index+1
 				if line[last_index]=='[':
 					index=line.find(']',last_index)+1
@@ -149,6 +163,7 @@ class GameHistory:####
 					self.child_visits.append(eval(line[last_index:index]))
 				else:
 					raise BaseException(f'get illegal first word:\'{line[last_index]}\'')
+				
 				last_index=index+1
 				self.root_values.append(eval(line[last_index:]))
 		self.length=len(self.root_values)
@@ -485,7 +500,7 @@ class SelfPlay:
 					len(np.array(observation).shape) == 3
 				), f"Observation should be 3 dimensionnal instead of {len(np.array(observation).shape)} dimensionnal. Got observation of shape: {np.array(observation).shape}"
 				assert (
-					observation.shape == self.config.observation_shape
+					list(observation.shape) == self.config.observation_shape
 				), f"Observation should match the observation_shape defined in MuZeroConfig. Expected {self.config.observation_shape} but got {np.array(observation).shape}."
 				'''#This will only be useful if 
 				stacked_observations = game_history.get_stacked_observations(
@@ -512,7 +527,7 @@ class SelfPlay:
 					print(
 						f"Root value : {root.value():.2f}"
 					)
-					print(f'visits:{[node.visit_count for node in root.children.values()]}')
+					print(f'visits:{[int(root.children[i].visit_count/self.config.num_simulations*100) if i in root.children else 0 for i in range(4)]}')
 				reward = game.step(action)#type changed here
 				observation=game.get_features()
 				if render:
@@ -565,3 +580,15 @@ class SelfPlay:
 			action = np.random.choice(actions, p=visit_count_distribution)
 
 		return action
+#show a game(for debugging)
+if __name__=='__main__':
+	con=my_config.default_config()
+	net=network.Network(con)
+	print(net.representation_model.summary())
+	exit(0)
+	weights=pickle.load(open('results/2022-04-02--14-58-12/model-001316.pkl', "rb"))
+	net.set_weights(weights)
+	manager=network.Manager(con,net)
+	pre=network.Predictor(manager,con)
+	his=GameHistory()
+	his.load('saved_games/resnet/132.record',con,pre)
