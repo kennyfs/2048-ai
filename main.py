@@ -87,7 +87,6 @@ class MuZero:
 		if 1 < self.num_gpus:
 			self.num_gpus = math.floor(self.num_gpus)
 		'''
-		ray.init(ignore_reinit_error=True)
 
 		# Checkpoint and replay buffer used to initialize workers
 		self.checkpoint = {
@@ -108,7 +107,6 @@ class MuZero:
 		}
 		self.replay_buffer = {}
 		
-		self.checkpoint["weights"] ,self.summary = copy.deepcopy(model_get(self.config))
 		# Workers
 		self.self_play_workers = None
 		self.test_worker = None
@@ -120,6 +118,8 @@ class MuZero:
 		self.model=network.Network(self.config)
 		self.manager=network.Manager(self.config,self.model)
 		self.predictor=network.Predictor(self.manager,self.config)
+
+		self.summary=self.model.summary()
 
 	def train(self, log_in_tensorboard=True):
 		"""
@@ -168,7 +168,7 @@ class MuZero:
 					self.replay_buffer_worker, self.shared_storage_worker
 				)
 				#if want to load existing game:
-				#self.replay_buffer_worker.load_games(1,5)
+				#self.replay_buffer_worker.load_games(1,5,self.config.load_game_dir)
 				info=self.replay_buffer_worker.get_info()
 				self.shared_storage_worker.set_info(info)
 				print('done playing')
@@ -460,5 +460,3 @@ if __name__ == "__main__":
 			else:
 				break
 			print("\nDone")
-
-	ray.shutdown()

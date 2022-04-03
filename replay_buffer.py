@@ -64,14 +64,14 @@ class ReplayBuffer:
 
 		print('save_game3')
 		if self.config.save_game_to_file and save_to_file:
-			game_history.save(os.path.join(self.config.game_dir, f'{self.num_played_games}.record'))
+			game_history.save(os.path.join(self.config.save_game_dir, f'{self.num_played_games}.record'))
 		print('save_game4')
 	def get_info(self):
 		return {"num_played_games":self.num_played_games,"num_played_steps":self.num_played_steps}
-	def load_games(self, first_game_id, length, path):
-		for i in range(first_game_id, first_game_id+length):
+	def load_games(self, first_game_id, last_game_id):
+		for i in range(first_game_id, last_game_id+1):
 			game_history=self_play.GameHistory()
-			game_history.load(f'{path}/{i}.record',self.config)
+			game_history.load(os.path.join(self.config.load_game_dir,f'{i}.record'),self.config)
 			self.save_game(game_history, save_to_file=False)
 	def get_buffer(self):
 		return self.buffer

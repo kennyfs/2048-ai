@@ -87,7 +87,8 @@ class Config:
 		
 		### Training
 		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
-		self.game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games", 'resnet')
+		self.load_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v2", 'resnet')
+		self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v2", 'resnet')
 		#change dir if you want
 		#haven't change game loading path in replay_buffer.py
 		self.training_steps=int(100e3)
@@ -99,9 +100,9 @@ class Config:
 		self.optimizer='SGD'
 		self.momentum=0.9
 		self.loss_weights=[0.15,0.8,1]#See paper appendix H Reanalyze
-		self.l2_weight=5e-5
+		self.l2_weight=2e-5
 		#value reward policy
-		self.training_steps_per_batch=2
+		self.training_steps_per_batch=5
 		self.save_model=True
 		#self.weight_decay=1e-4 #useless for now
 
@@ -126,7 +127,7 @@ class Config:
 		self.replay_buffer_size=1000
 
 		#overall hyperparameters
-		self.training_steps_to_selfplay_steps_ratio=0.12
+		self.training_steps_to_selfplay_steps_ratio=0.02
 		self.reanalyze_games_to_selfplay_games_ratio=0.8
 		self.selfplay_games_to_test_games_ratio=0.1
 		self.selfplay_games_per_run=5
@@ -147,6 +148,6 @@ def default_config():
 		td_steps=30,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
 		#2048 games tend to be very long
 		num_actors=5,
-		lr_init=2e-5,
+		lr_init=2e-4,
 		lr_decay_steps=35e3,
 		visit_softmax_temperature_fn=default_visit_softmax_temperature)

@@ -2,5 +2,5 @@ test.py
 __pycache__/
 test*
 results
-saved_games
+saved_games*
 .vscode
