@@ -6,7 +6,6 @@ import random
 import sys
 
 import numpy as np
-import ray
 import tensorflow as tf
 
 import environment
@@ -154,7 +153,7 @@ class MuZero:
 
 		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
 
-		self.replay_buffer_worker = replay_buffer.ReplayBuffer.remote(self.checkpoint, self.replay_buffer, self.config)
+		self.replay_buffer_worker = replay_buffer.ReplayBuffer(self.checkpoint, self.replay_buffer, self.config)
 
 		if self.config.reanalyze:
 			self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
@@ -169,8 +168,8 @@ class MuZero:
 					self.replay_buffer_worker, self.shared_storage_worker
 				)
 				#if want to load existing game:
-				#ray.get(self.replay_buffer_worker.load_games.remote(1,5))
-				info=ray.get(self.replay_buffer_worker.get_info.remote())
+				#self.replay_buffer_worker.load_games(1,5)
+				info=self.replay_buffer_worker.get_info()
 				self.shared_storage_worker.set_info(info)
 				print('done playing')
 				self.training_worker.run_update_weights(
@@ -321,7 +320,7 @@ class MuZero:
 		"""
 
 		print("\n\nPersisting replay buffer games to disk...")
-		replay_buffer = ray.get(self.replay_buffer_worker.get_buffer.remote())
+		replay_buffer = self.replay_buffer_worker.get_buffer()
 		self.shared_storage_worker.save(replay_buffer,self.model)
 
 		print("\nShutting down workers...")
@@ -354,7 +353,7 @@ class MuZero:
 				print(f"\nThere is no model saved in {checkpoint_path}.")
 
 		# Load replay buffer
-		if replay_buffer_path:
+		if replay_buffer_path and False:
 			if os.path.exists(replay_buffer_path):
 				with open(replay_buffer_path, "rb") as f:
 					self.replay_buffer = pickle.load(f)

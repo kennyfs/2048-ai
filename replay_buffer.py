@@ -3,7 +3,6 @@ import os
 import time
 
 import numpy as np
-import ray
 import tensorflow as tf
 
 import my_config
@@ -11,7 +10,6 @@ import network
 import self_play
 
 
-@ray.remote
 class ReplayBuffer:
 	"""
 	Class which run in a dedicated thread to store played games and generate batch.
@@ -325,9 +323,7 @@ class Reanalyze:
 			while (self.num_reanalyzed_games / max(1,shared_storage.get_info('num_played_games'))
 				< self.config.reanalyze_games_to_selfplay_games_ratio):
 
-				game_id, game_history, _ = ray.get(
-					replay_buffer.sample_game.remote(force_uniform=True)
-				)
+				game_id, game_history, _ = replay_buffer.sample_game(force_uniform=True)
 
 				# Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
 				
@@ -342,7 +338,7 @@ class Reanalyze:
 				)
 				game_history.reanalyzed_predicted_root_values =	tf.squeeze(values).numpy()
 
-				replay_buffer.update_game_history.remote(game_id, game_history)
+				replay_buffer.update_game_history(game_id, game_history)
 				self.num_reanalyzed_games += 1
 				shared_storage.set_info(
 					"num_reanalyzed_games", self.num_reanalyzed_games

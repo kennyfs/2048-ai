@@ -2,7 +2,6 @@ import copy
 import time
 
 import numpy as np
-import ray
 import tensorflow as tf
 
 import network
@@ -51,7 +50,7 @@ class Trainer:
 		# Wait for the replay buffer to be filled
 		assert shared_storage.get_info("num_played_games") > 0, 'no enough games, get 0'
 		self.training_step=shared_storage.get_info('training_step')
-		next_batch = replay_buffer.get_batch.remote()
+		next_batch = replay_buffer.get_batch()
 		# Training loop
 		shared_storage.clear_loss()
 		start_step=self.training_step
@@ -61,9 +60,9 @@ class Trainer:
 				and
 				self.training_step < self.config.training_steps):
 			st=time.time()
-			index_batch, batch = ray.get(next_batch)
+			index_batch, batch = next_batch
 			print(f'generating data consumed {time.time()-st} seconds.')
-			next_batch = replay_buffer.get_batch.remote()
+			next_batch = replay_buffer.get_batch()
 			self.update_learning_rate()
 			st=time.time()
 			(
@@ -78,7 +77,7 @@ class Trainer:
 
 			if self.config.PER:
 				# Save new priorities in the replay buffer (See https://arxiv.org/abs/1803.00933)
-				replay_buffer.update_priorities.remote(priorities, index_batch)
+				replay_buffer.update_priorities(priorities, index_batch)
 
 			# Save to the shared storage
 			shared_storage.set_info(

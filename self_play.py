@@ -1,16 +1,13 @@
 import asyncio
 import collections
 import copy
-from lib2to3.pytree import Base
 import math
 import pickle
 import environment
 import random
 import sys
-import time
 
 import numpy as np
-import ray
 import tensorflow as tf
 import network
 import my_config
@@ -451,7 +448,7 @@ class SelfPlay:
 			return
 		total=0
 		while total<self.config.selfplay_games_per_run:
-			#self.predictor.manager.set_weights(ray.get(shared_storage.get_info("weights")))
+			#self.predictor.manager.set_weights(shared_storage.get_info("weights"))
 
 			print('flag self_play1')
 			game_history=self.play_game(
@@ -461,7 +458,7 @@ class SelfPlay:
 				True,### if you want to render, change this
 			)
 			print('flag self_play2')
-			ray.get(replay_buffer.save_game.remote(game_history))#error seems to be here
+			replay_buffer.save_game(game_history)#error seems to be here
 			print('flag self_play3')
 			total+=1
 	
