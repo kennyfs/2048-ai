@@ -73,7 +73,6 @@ class GameHistory:####
 			self.root_values.append(root.value())
 		else:
 			raise BaseException('store_search_statistics receive root as None')
-			self.root_values.append(None)
 
 	def get_stacked_observations(self, index, num_stacked_observations):
 		"""
@@ -140,7 +139,7 @@ class GameHistory:####
 					predictor.manager.add_coroutine_list(predictor.initial_inference(self.observation_history[-1]))
 					if len(self.observation_history)>=2:
 						predictor.manager.add_coroutine_list(predictor.recurrent_inference(self.observation_history[-2],self.action_history[-1]))
-					out=predictor.manager.run_coroutine_list()
+					out=predictor.manager.run_coroutine_list(True)
 					output=out[0]
 					print(f'value:{output.value}, policy:{tf.nn.softmax(output.policy)}')
 					if len(self.observation_history)>=2:
@@ -207,7 +206,7 @@ class MCTS:
 			#defaulted not to use previously searched nodes and create a new tree
 			root = Node(0)
 			self.predictor.manager.add_coroutine_list(self.predictor.initial_inference(observation))
-			output=self.predictor.manager.run_coroutine_list()[0]
+			output=self.predictor.manager.run_coroutine_list(True)[0]
 			root_predicted_value=output.value
 			reward=output.reward
 			policy_logits=output.policy
@@ -270,12 +269,8 @@ class MCTS:
 				parent.hidden_state,
 				action
 			)
-			if now_type==1:
-				actions=self.config.action_space_type1
-			else:
-				actions=self.config.action_space_type0
 			node.expand(
-				actions,
+				self.config.action_space_type0,
 				now_type,
 				output.reward,
 				tf.nn.softmax(output.policy) if now_type==0 else self.config.type1_p,

@@ -90,15 +90,13 @@ def action_to_onehot(action, board_size, matrix=False):
 	action=int(action)
 	if matrix:
 		#4 planes for UDLR, next 2 planes for putting 2 or 4
-		ret=np.zeros((4+2,board_size,board_size))
+		ret=np.zeros((4,board_size,board_size))
 		if 0<=action and action<4:
 			ret[action,:,:]=1/(board_size**2)
 		else:
-			x,y,num=environment.add_action_to_pos(action,board_size)
-			num-=1
-			ret[4+num,x,y]=1.
+			raise ValueError('action should be in [0,4)')
 	else:
-		ret=np.zeros((4+2*board_size**2),dtype=np.float32)
+		ret=np.zeros((4),dtype=np.float32)
 		ret[action]=1.
 	return ret
 def batch_action_to_onehot(action_batch, board_size, matrix=False):
@@ -108,27 +106,28 @@ def batch_action_to_onehot(action_batch, board_size, matrix=False):
 		ret=np.concatenate([np.expand_dims(action_to_onehot(action,board_size,matrix=True),axis=0) for action in action_batch],axis=0)
 		#shape:(batch_size,4+2,board_size,board_size)
 	else:
-		ret=tf.zeros((batch_size*(4+2*board_size**2)),dtype=np.float32)
-		indices=action_batch+(tf.range(batch_size)*(4+2*board_size**2))
+		ret=tf.zeros((batch_size*4),dtype=np.float32)
+		indices=action_batch+(tf.range(batch_size)*4)
 		indices=tf.expand_dims(indices, axis=-1)
 		ret=tf.tensor_scatter_nd_update(
 			ret,indices=indices,updates=tf.ones((batch_size),dtype=np.float32)
 		)
-		ret=tf.reshape(ret,(batch_size,(4+2*board_size**2)))
+		ret=tf.reshape(ret,(batch_size,4))
 	return ret
 NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state','value','policy'])
 
 												####shapes:###
 #observation:		in shape of (batch_size,channels,board_size_x,board_size_y)#board_size_x=board_size_y in most cases
 #channels=history_length*planes per image
-#hidden_state:		in shape of (batch_size,hidden_state_size(32))
-#					or (batch_size, num_channels, hidden_state_size_x, hidden_state_size_y)
-#action:			if one-hotted, for fully connected network in shape of (batch_size,4+2*boardsize**2)
-#					if one-hotted, for resnet in shape of (batch_size,4+2,boardsize,boardsize)#4 for UDLR, 2 for put 2 or 4
+#hidden_state:		in shape of (batch_size,hidden_state_size(defined in my_config.py))
+#					or (batch_size, num_channels, boardsize, boardsize)
+#action:			if one-hotted, for fully connected network in shape of (batch_size,4)
+#					if one-hotted, for resnet in shape of (batch_size,4,boardsize,boardsize)#4 for UDLR, all 1 in selected plane
 #policy:			in shape of (batch_size,4(UDLR))
 #value and reward:	in shape of (batch_size,full_support_size) if using support, else (batch_size,1) #about "support", described in config.py
 def my_adjust_dims(inputs,expected_shape_length,axis=0):
 	'''
+	extend from last and remove from first by default
 	axis: 0:default, 1:first, 2:last
 	'''
 	axises=len(inputs.shape)
@@ -233,11 +232,11 @@ class FullyConnectedNetwork(AbstractNetwork):
 		#network
 		
 		self.representation_model=self.one_output_model(
-			config.observation_channels*config.board_size**2,
+			config.observation_shape[0]*config.observation_shape[1]*config.observation_shape[2]*config.observation_shape[3],
 			config.representation_size,
 			config.hidden_state_size)
 		self.dynamics_model=self.two_outputs_model(
-			config.hidden_state_size+4+2*config.board_size**2,
+			config.hidden_state_size+4,
 			config.dynamics_size,
 			config.dynamics_hidden_state_head_size,
 			config.dynamics_reward_head_size,
@@ -279,8 +278,9 @@ class FullyConnectedNetwork(AbstractNetwork):
 		def __init__(self,input_size,sizes,output_size):
 			super().__init__()
 			self.my_layers=[tf.keras.layers.Flatten()]
-			for size in sizes+[output_size]:
+			for size in sizes:
 				self.my_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
+			self.my_layers.append(tf.keras.layers.Dense(output_size))
 			self.build([1,input_size])
 
 		def call(self,x,training=False):
@@ -304,11 +304,13 @@ class FullyConnectedNetwork(AbstractNetwork):
 			for size in common_size:
 				self.common_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
 				
-			for size in first_head_size+[first_output_size]:
+			for size in first_head_size:
 				self.first_head_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
+			self.first_head_layers.append(tf.keras.layers.Dense(first_output_size))
 				
-			for size in second_head_size+[second_output_size]:
+			for size in second_head_size:
 				self.second_head_layers.append(tf.keras.layers.Dense(size,activation=tf.nn.relu))
+			self.second_head_layers.append(tf.keras.layers.Dense(second_output_size))
 			self.build([1,input_size])
 
 		def call(self,x,training=False):
@@ -380,7 +382,7 @@ class ResidualBlock(tf.keras.Model):
 		self.bn1 = tf.keras.layers.BatchNormalization()
 		self.bn2 = tf.keras.layers.BatchNormalization()
 		self.relu = tf.keras.layers.ReLU()
-	def __call__(self, x):
+	def call(self, x):
 		residual = x
 		out = self.relu(self.bn1(self.conv1(x)))
 		out = self.bn2(self.conv2(out))
@@ -405,11 +407,8 @@ class representation(tf.keras.Model):
 		out=self.bn(out)
 		out=self.relu(out)
 		for conv1,bn1,conv2,bn2 in self.resblock:
-			tmpout=conv1(out)
-			tmpout=bn1(tmpout)
-			tmpout=self.relu(tmpout)
-			tmpout=conv2(tmpout)
-			tmpout=bn2(tmpout)
+			tmpout=self.relu(bn1(conv1(out)))
+			tmpout=bn2(conv2(tmpout))
 			out+=tmpout
 			out=self.relu(out)
 		return out
@@ -440,11 +439,8 @@ class dynamics(tf.keras.Model):
 		out=self.bn(out)
 		out=self.relu(out)
 		for conv1,bn1,conv2,bn2 in self.resblock:
-			tmpout=conv1(out)
-			tmpout=bn1(tmpout)
-			tmpout=self.relu(tmpout)
-			tmpout=conv2(tmpout)
-			tmpout=bn2(tmpout)
+			tmpout=self.relu(bn1(conv1(out)))
+			tmpout=bn2(conv2(tmpout))
 			out+=tmpout
 			out=self.relu(out)
 		hidden_state=out
@@ -497,7 +493,7 @@ class ResNetNetwork(AbstractNetwork):
 			config.num_channels,
 			config.num_blocks)
 		self.dynamics_model=dynamics(
-			[config.num_channels+6, config.board_size, config.board_size],
+			[config.num_channels+4, config.board_size, config.board_size],
 			config.num_channels,
 			config.num_blocks,
 			config.reduced_channels_reward,
@@ -517,6 +513,7 @@ class ResNetNetwork(AbstractNetwork):
 	def dynamics(self, hidden_state, action):
 		myinput=tf.concat([hidden_state, action], axis=1)
 		hidden_state, reward=self.dynamics_model(myinput)
+		hidden_state=scale_hidden_state(hidden_state)
 		return hidden_state, reward
 	def dynamics_for_manager(self, inputs):
 		'''
@@ -557,7 +554,7 @@ class ResNetNetwork(AbstractNetwork):
 		for model in self.representation_model,self.dynamics_model,self.prediction_model:
 			stringlist = []
 			model.summary(print_fn=lambda x: stringlist.append(x))
-			ret += "\n".join(stringlist)
+			ret += "\n".join(stringlist)+'\n-----------------------------\n'
 		return ret
 ####### End CNN or RESNET ########
 ##################################
@@ -614,21 +611,22 @@ class Manager:
 				elif network=='prediction':
 					ret=self.prediction(features)
 					return ret[0][0],support_to_scalar(ret[1],self.support)[0]
-				### 要檢查tensorflow keras能不能處理沒有batch_size維度的輸入
 				else:
 					raise NotImplementedError
 	def add_coroutine_list(self,toadd):
 		#if toadd not in self.coroutine_list:
 		self.coroutine_list.append(toadd)
 			
-	def run_coroutine_list(self):
+	def run_coroutine_list(self, output=False):
 		ret=self.loop.run_until_complete(asyncio.gather(*(self.coroutine_list)))
 		if self.queue:
 			self.coroutine_list=[self.prediction_worker()]
-			return ret[1:]
+			if output:
+				return ret[1:]
 		else:
 			self.coroutine_list=[]
-			return ret
+			if output:
+				return ret
 	def are_all_queues_empty(self):
 		for q in (self.representation_queue,self.dynamics_queue,self.prediction_queue):
 			if not q.empty():
