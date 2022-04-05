@@ -157,7 +157,7 @@ class MuZero:
 
 		if self.config.reanalyze:
 			self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
-		self.self_play_worker = self_play.SelfPlay(self.predictor, self.Game, self.config, self.config.seed)
+		self.self_play_worker = self_play.SelfPlay(self.predictor, self.Game, self.config)
 
 		# Launch workers
 		counter=0
@@ -455,7 +455,7 @@ if __name__ == "__main__":
 				while not done:
 					action = env.human_to_action()
 					observation, reward, done = env.step(action)
-					print(f"\nAction: {env.action_to_string(action)}\nReward: {reward}")
+					print(f"\nAction: {environment.action_to_string(action)}\nReward: {reward}")
 					env.render()
 			else:
 				break
