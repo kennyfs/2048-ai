@@ -127,7 +127,7 @@ class Environment:
 		x,y=blank[randint(0,len(blank)-1)]
 		num=2 if randint(1,10)==1 else 1#10% to be a 4(2)
 		self.grid[x][y]=num
-		return add_pos_to_action(x,y,num)
+		return add_pos_to_action(x,y,num,self.board_size)
 	def valid(self,action)->bool:
 		if 0<=action and action<=3:#### this needs optimizing
 			tmp=Environment(self.config,board=copy.deepcopy(self.grid))

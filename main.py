@@ -170,7 +170,7 @@ class MuZero:
 					self.replay_buffer_worker, self.shared_storage_worker
 				)
 				#if want to load existing game:
-				#self.replay_buffer_worker.load_games(1,5,self.config.load_game_dir)
+				#self.replay_buffer_worker.load_games(1,5)
 				info=self.replay_buffer_worker.get_info()
 				self.shared_storage_worker.set_info(info)
 				print('done playing')
@@ -191,7 +191,16 @@ class MuZero:
 		'''
 		if log_in_tensorboard:
 			self.log_once()'''
-
+	def train_only(self):
+		self.replay_buffer_worker.load_games(1,10)
+		info=self.replay_buffer_worker.get_info()
+		self.shared_storage_worker.set_info(info)
+		print('done playing')
+		while 1:
+			self.training_worker.run_update_weights(
+				self.replay_buffer_worker, self.shared_storage_worker, 50
+			)
+			counter, training_counter=self.log_once(counter, training_counter, False)
 	def log_once(self, counter, training_counter, test_game=True):
 		"""
 		Keep track of the training performance.
@@ -202,7 +211,6 @@ class MuZero:
 				self.predictor,
 				self.Game,
 				self.config,
-				self.config.seed + self.config.num_actors,
 			)
 			self.test_worker.self_play(
 				None, self.shared_storage_worker, True
@@ -310,6 +318,7 @@ class MuZero:
 				)
 			else:
 				raise NotImplementedError
+			self.shared_storage_worker.clear_loss()
 			print(
 				f'Last test score: {info["total_reward"]:6d}. Training step: {info["training_step"]}/{self.config.training_steps}. Played games: {info["num_played_games"]}. Loss: {(sum(info["total_loss"])/len(info["total_loss"]) if len(info["total_loss"])>0 else 0):.3f}',
 				#end="\r",

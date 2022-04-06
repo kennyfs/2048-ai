@@ -1,11 +1,11 @@
 import asyncio
 import collections
 from abc import ABC, abstractmethod
+import random
 
 import numpy as np
 import tensorflow as tf
 import my_config
-import environment
 
 def scale_hidden_state(to_scale_hidden_state:np.array):
 	'''
@@ -672,6 +672,8 @@ class Manager:
 						reward=tf.reshape(reward,(-1))
 					for i in range(len(item_list)):
 						item_list[i].future.set_result((hidden_state[i],reward[i]))
+						if random.random()<0.01:
+							print(f'r:{reward[i]}')
 				elif name=='prediction':
 					policy,value=results
 					assert policy.shape[0]==len(item_list) and value.shape[0]==len(item_list), 'sizes of policy('+policy.shape+'), value('+value.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
@@ -681,6 +683,8 @@ class Manager:
 						value=tf.reshape(value,(-1))
 					for i in range(len(item_list)):
 						item_list[i].future.set_result((policy[i],value[i]))
+						if random.random()<0.01:
+							print(f'v:{value[i]}')
 class Predictor:
 	'''
 	queuing and predict with manager

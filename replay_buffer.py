@@ -254,19 +254,16 @@ class ReplayBuffer:
 		for current_index in range(
 			state_index+1, state_index + self.config.num_unroll_steps + 1#+1 to +num_unroll_steps
 		):
-			if current_index < game_history.length and game_history.type_history[current_index]==1:
-				actions.append(game_history.action_history[current_index])
-				continue
 			value = self.compute_target_value(game_history, current_index)
 			if current_index < game_history.length-1:
-				actions.append(game_history.action_history[current_index])
+				actions.append(game_history.action_history[current_index][0])
 				target_rewards.append(game_history.reward_history[current_index])
 
 				target_values.append(value)
 				target_policies.append(game_history.child_visits[current_index])
 			elif current_index == game_history.length-1:
 				#The game has ended, so value and policy are just the value of dummy.
-				actions.append(game_history.action_history[current_index])
+				actions.append(game_history.action_history[current_index][0])
 				target_rewards.append(game_history.reward_history[current_index])
 
 				target_values.append(0)
@@ -278,17 +275,16 @@ class ReplayBuffer:
 					]
 				)
 			else:
-				if current_index%2==1:
-					# States past the end of games are treated as absorbing states
-					target_values.append(0)
-					target_rewards.append(0)
-					# Uniform policy
-					target_policies.append(
-						[
-							1 / len(self.config.action_space_type0)
-							for _ in self.config.action_space_type0
-						]
-					)
+				# States past the end of games are treated as absorbing states
+				target_values.append(0)
+				target_rewards.append(0)
+				# Uniform policy
+				target_policies.append(
+					[
+						1 / len(self.config.action_space_type0)
+						for _ in self.config.action_space_type0
+					]
+				)
 				actions.append(np.random.choice(self.config.action_space_type0))
 		return 	(np.array(target_values,dtype=np.float32),
 				np.array(target_rewards,dtype=np.float32),

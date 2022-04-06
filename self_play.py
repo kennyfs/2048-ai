@@ -240,7 +240,6 @@ class MCTS:
 			root.add_exploration_noise(
 				dirichlet_alpha=self.config.root_dirichlet_alpha,
 				exploration_fraction=self.config.root_exploration_fraction,
-				seed=self.seed,
 			)
 
 		min_max_stats = MinMaxStats()
@@ -373,14 +372,13 @@ class Node:
 		for action, p in policy.items():
 			self.children[action] = Node(p)
 
-	def add_exploration_noise(self, dirichlet_alpha, exploration_fraction, seed):
+	def add_exploration_noise(self, dirichlet_alpha, exploration_fraction):
 		"""
 		At the start of each search, we add dirichlet noise to the prior of the root to
 		encourage the search to explore new actions.
 		"""
 		actions = list(self.children.keys())
 		
-		np.random.seed(seed)
 		noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
 		frac = exploration_fraction
 		for a, n in zip(actions, noise):
@@ -445,7 +443,6 @@ class SelfPlay:
 		game.reset()
 		observation = game.get_features(None)
 		#initial position
-		game_history.addtile(action)
 		#training target can be started at a time where the next move is adding move, so keep all observation history
 
 		for _ in range(2):
@@ -483,7 +480,6 @@ class SelfPlay:
 				action = self.select_action(
 					root,
 					temperature,
-					game_id,
 				)
 
 				if render:

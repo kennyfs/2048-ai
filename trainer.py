@@ -117,7 +117,7 @@ class Trainer:
 		priorities = np.zeros_like(target_value_scalar)
 
 		# observation_batch: batch, channels, height, width
-		# action_batch: batch, num_unroll_steps,2#a UDLR and an add
+		# action_batch: batch, num_unroll_steps # UDLR
 		# target_value_batch: batch, num_unroll_steps+1 #+1 for the those of initial reference
 		# target_reward_batch: batch, num_unroll_steps+1
 		# target_policy_batch: batch, num_unroll_steps+1, action_space_size
@@ -135,7 +135,7 @@ class Trainer:
 		# target_reward: batch, num_unroll_steps+1
 		assert (
 			list(observation_batch.shape)==[self.batch_size]+self.config.observation_shape and 
-			list(action_batch.shape)==[self.batch_size,self.num_unroll_steps,2] and
+			list(action_batch.shape)==[self.batch_size,self.num_unroll_steps] and
 			list(target_value_batch.shape)==[self.batch_size,self.num_unroll_steps+1,2*self.config.support+1] and
 			list(target_reward_batch.shape)==[self.batch_size,self.num_unroll_steps+1,2*self.config.support+1] and
 			list(target_policy_batch.shape)==[self.batch_size,self.num_unroll_steps+1,4] and
@@ -161,15 +161,12 @@ class Trainer:
 			policy_logits=output.policy
 			predictions = [(value, reward, policy_logits)]
 			for i in range(self.num_unroll_steps):### start to check data processing here
-				hidden_state = self.model.recurrent_inference(
-					hidden_state, action_batch[:, i, 0]
-				).hidden_state
-				hidden_state=scale_gradient(hidden_state, 0.5)
 				output = self.model.recurrent_inference(
-					hidden_state, action_batch[:, i, 1]
+					hidden_state, action_batch[:, i]
 				)
 				reward=output.reward
 				hidden_state=output.hidden_state
+				hidden_state=scale_gradient(hidden_state, 0.5)
 				value=output.value
 				policy_logits=output.policy
 				# Scale the gradient at the start of the dynamics function (See paper appendix Training)
@@ -180,8 +177,8 @@ class Trainer:
 			
 			#predictions[t]=output at time t*2
 			# predictions: num_unroll_steps/2+1, 3, (batch, (2*support+1 | 2*support+1 | 9)) (according to the 2nd dim)
-			total_value_loss,total_reward_loss,total_policy_loss=tf.zeros((self.batchsize)),tf.zeros((self.batchsize)),tf.zeros((self.batchsize))
-			# shape of losses: batchsize
+			total_value_loss,total_reward_loss,total_policy_loss=tf.zeros((self.batch_size)),tf.zeros((self.batch_size)),tf.zeros((self.batch_size))
+			# shape of losses: batch_size
 			for i, prediction in enumerate(predictions):
 				value, reward, policy_logits = prediction
 				target_value=target_value_batch[:,i,:]
