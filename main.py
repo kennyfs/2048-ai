@@ -57,6 +57,8 @@ class MuZero:
 		if seed==None:
 			seed=random.randrange(2**32)
 			print(f'seed was set to be {seed}.')
+			with open(self.config.results_path+'/seed.txt','w') as f:
+				f.write(str(seed))
 		self.config.seed=seed
 		random.seed(seed)
 		np.random.seed(seed)

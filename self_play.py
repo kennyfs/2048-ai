@@ -30,7 +30,7 @@ class MinMaxStats():
 			# We normalize only when we have set the maximum and minimum values.
 			return (value-self.minimum)/(self.maximum-self.minimum)
 		return value
-class GameHistory:####
+class GameHistory:
 	"""
 	Store only usefull information of a self-play game.
 	
@@ -55,20 +55,32 @@ class GameHistory:####
 		self.priorities = None
 		self.game_priority = None
 
-	def store_search_statistics(self, root, action_space):
+	def store_search_statistics(self, root, action_space, winer_takes_all=False):
 		'''
 		Turn visit count from root into a policy, store policy and valuesss
 		'''
 		if root is not None:
 			sum_visits = sum(child.visit_count for child in root.children.values())
-			self.child_visits.append(
-				[
-					root.children[a].visit_count / sum_visits
-					if a in root.children
-					else 0
-					for a in action_space
-				]
-			)
+			if winer_takes_all:
+				visits=[root.children[a].visit_count
+						if a in root.children
+						else 0
+						for a in action_space]
+				mx=max(visits)
+				s=0
+				for v in visits:
+					if v==mx:
+						s+=1
+				self.child_visits.append([1/s if v==mx else 0 for v in visits])
+			else:
+				self.child_visits.append(
+					[
+						root.children[a].visit_count / sum_visits
+						if a in root.children
+						else 0
+						for a in action_space
+					]
+				)
 
 			self.root_values.append(root.value())
 		else:
@@ -115,6 +127,8 @@ class GameHistory:####
 		return self.observation_history[index].copy()
 	def save(self, file):
 		with open(file,'w') as F:
+			F.write(f'{self.initial_add[0]}\n')
+			F.write(f'{self.initial_add[1]}\n')
 			for action,reward,visits,value in zip(self.action_history,self.reward_history,self.child_visits,self.root_values):
 				F.write(f'{action} {reward} {visits} {value}\n')
 	def load(self, file, config, predictor=None):
@@ -483,7 +497,7 @@ class SelfPlay:
 				if render:
 					print(f"Played action: {environment.action_to_string(action,self.config.board_size)}")
 
-				game_history.store_search_statistics(root, self.config.action_space_type0)
+				game_history.store_search_statistics(root, self.config.action_space_type0, self.config.winer_takes_all)
 
 
 				#add a tile

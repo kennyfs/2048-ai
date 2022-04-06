@@ -18,10 +18,6 @@ class Trainer:
 
 	def __init__(self, initial_checkpoint, model:network.Network, config:my_config.Config):
 		self.config = config
-		seed=config.seed
-		# Fix random generator seed
-		np.random.seed(seed)
-		tf.random.set_seed(seed)
 		self.model=model
 		'''
 		# Initialize the network
@@ -31,6 +27,8 @@ class Trainer:
 		self.training_step = initial_checkpoint["training_step"]
 		self.l2_weight=config.l2_weight
 
+		self.batch_size=self.config.batch_size
+		self.num_unroll_steps=self.config.num_unroll_steps
 		# Initialize the optimizer
 		if self.config.optimizer == "SGD":
 			self.optimizer = tf.keras.optimizers.SGD(
@@ -64,6 +62,7 @@ class Trainer:
 			print(f'generating data consumed {time.time()-st} seconds.')
 			next_batch = replay_buffer.get_batch()
 			self.update_learning_rate()
+			print(f'training_step:{self.training_step},lr={self.optimizer.learning_rate}')
 			st=time.time()
 			(
 				priorities,
@@ -100,7 +99,7 @@ class Trainer:
 		# log has a long series of losses.
 	def update_weights(self, batch, shared_storage):
 		"""
-		Perform one training step.
+		Perform one training step.update_learning_rate
 		"""
 		(
 			observation_batch,
@@ -113,30 +112,34 @@ class Trainer:
 		#for debug, check the shape of the batch, maybe is useful
 		#for b in batch:
 		#	print(b.shape)
-		batchsize=action_batch.shape[0]
-		num_unroll_steps=action_batch.shape[1]
 		# Keep values as scalars for calculating the priorities for the prioritized replay
 		target_value_scalar = np.copy(target_value_batch)
 		priorities = np.zeros_like(target_value_scalar)
 
 		# observation_batch: batch, channels, height, width
-		# action_batch: batch, num_unroll_steps
-		# target_value: batch, num_unroll_steps/2+1 #+1 for the those of initial reference
-		# target_reward: batch, num_unroll_steps/2+1
-		# target_policy: batch, num_unroll_steps/2+1, action_space_size
+		# action_batch: batch, num_unroll_steps,2#a UDLR and an add
+		# target_value_batch: batch, num_unroll_steps+1 #+1 for the those of initial reference
+		# target_reward_batch: batch, num_unroll_steps+1
+		# target_policy_batch: batch, num_unroll_steps+1, action_space_size
 		if self.config.support:
 			target_value_batch = network.scalar_to_support(target_value_batch, self.config.support)
 			target_reward_batch = network.scalar_to_support(target_reward_batch, self.config.support)
 		else:
 			target_value_batch=np.expand_dims(target_value_batch,axis=-1)
 			target_reward_batch=np.expand_dims(target_reward_batch,axis=-1)
-		# target_value: batch, num_unroll_steps/2+1, 2*support+1
-		# target_reward: batch, num_unroll_steps/2+1, 2*support+1
+		# target_value: batch, num_unroll_steps+1, 2*support+1
+		# target_reward: batch, num_unroll_steps+1, 2*support+1
 
 		# if not using support
-		# target_value: batch, num_unroll_steps/2+1
-		# target_reward: batch, num_unroll_steps/2+1
-
+		# target_value: batch, num_unroll_steps+1
+		# target_reward: batch, num_unroll_steps+1
+		assert (
+			list(observation_batch.shape)==[self.batch_size]+self.config.observation_shape and 
+			list(action_batch.shape)==[self.batch_size,self.num_unroll_steps,2] and
+			list(target_value_batch.shape)==[self.batch_size,self.num_unroll_steps+1,2*self.config.support+1] and
+			list(target_reward_batch.shape)==[self.batch_size,self.num_unroll_steps+1,2*self.config.support+1] and
+			list(target_policy_batch.shape)==[self.batch_size,self.num_unroll_steps+1,4] and
+			list(weight_batch.shape)==[self.batch_size]),f'batch shape error,{observation_batch.shape},{action_batch.shape},{target_value_batch.shape},{target_reward_batch.shape},{target_policy_batch.shape},{weight_batch.shape}'
 		class tmp:#I don't know better solution
 			def __init__(self, value=None):
 				self.value=value
@@ -157,13 +160,13 @@ class Trainer:
 			reward=np.zeros_like(value)
 			policy_logits=output.policy
 			predictions = [(value, reward, policy_logits)]
-			for i in range(0, action_batch.shape[1],2):### start to check data processing here
+			for i in range(self.num_unroll_steps):### start to check data processing here
 				hidden_state = self.model.recurrent_inference(
-					hidden_state, action_batch[:, i]
+					hidden_state, action_batch[:, i, 0]
 				).hidden_state
 				hidden_state=scale_gradient(hidden_state, 0.5)
 				output = self.model.recurrent_inference(
-					hidden_state, action_batch[:, i+1]
+					hidden_state, action_batch[:, i, 1]
 				)
 				reward=output.reward
 				hidden_state=output.hidden_state
@@ -172,12 +175,12 @@ class Trainer:
 				# Scale the gradient at the start of the dynamics function (See paper appendix Training)
 				hidden_state=scale_gradient(hidden_state, 0.5)
 				predictions.append((value, reward, policy_logits))
-			assert len(predictions)==num_unroll_steps/2+1,f'len(predictions):{len(predictions)}\nnum_unroll_steps:{num_unroll_steps}'
+			assert len(predictions)==self.num_unroll_steps+1,f'len(predictions):{len(predictions)}\nself.num_unroll_steps:{self.num_unroll_steps}'
 			#maybe there should be more assertion
 			
 			#predictions[t]=output at time t*2
 			# predictions: num_unroll_steps/2+1, 3, (batch, (2*support+1 | 2*support+1 | 9)) (according to the 2nd dim)
-			total_value_loss,total_reward_loss,total_policy_loss=tf.zeros((batchsize)),tf.zeros((batchsize)),tf.zeros((batchsize))
+			total_value_loss,total_reward_loss,total_policy_loss=tf.zeros((self.batchsize)),tf.zeros((self.batchsize)),tf.zeros((self.batchsize))
 			# shape of losses: batchsize
 			for i, prediction in enumerate(predictions):
 				value, reward, policy_logits = prediction
@@ -189,9 +192,9 @@ class Trainer:
 					total_value_loss+=value_loss
 					total_policy_loss+=policy_loss
 				else:
-					total_value_loss+=scale_gradient(value_loss, 1.0/(num_unroll_steps/2-1))
-					total_reward_loss+=scale_gradient(reward_loss, 1.0/(num_unroll_steps/2-1))
-					total_policy_loss+=scale_gradient(policy_loss, 1.0/(num_unroll_steps/2-1))
+					total_value_loss+=scale_gradient(value_loss, 1.0/(self.num_unroll_steps-1))
+					total_reward_loss+=scale_gradient(reward_loss, 1.0/(self.num_unroll_steps-1))
+					total_policy_loss+=scale_gradient(policy_loss, 1.0/(self.num_unroll_steps-1))
 				if self.config.support:
 					pred_value_scalar = network.support_to_scalar(value, self.config.support)
 				else:

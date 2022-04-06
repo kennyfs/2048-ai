@@ -112,12 +112,11 @@ class ReplayBuffer:
 			)
 
 		# observation_batch: batch, channels, height, width
-		# action_batch: batch, num_unroll_steps+1
+		# action_batch: batch, num_unroll_steps+1, 2
 		# value_batch: batch, num_unroll_steps+1
 		# reward_batch: batch, num_unroll_steps+1
-		# policy_batch: batch, num_unroll_steps+1, len(action_space(type 0))
+		# policy_batch: batch, num_unroll_steps+1, len(action_space(type 0))=4
 		# weight_batch: batch
-		# gradient_scale_batch: batch, num_unroll_steps+1
 		return (
 			index_batch,
 			(
@@ -180,10 +179,6 @@ class ReplayBuffer:
 			position_prob = position_probs[position_index]
 		else:
 			position_index = np.random.choice(game_history.length)
-		while position_index<game_history.length and game_history.type_history[position_index]!=0:
-			position_index+=1
-		if position_index==game_history.length:
-			return self.sample_position(game_history, force_uniform)
 		return position_index, position_prob
 
 	def update_game_history(self, game_id, game_history):

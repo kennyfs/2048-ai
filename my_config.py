@@ -134,6 +134,9 @@ class Config:
 
 		#manager config
 		self.manager_queue=True
+
+		#experiment
+		self.winer_takes_all=False
 def default_config():
 	return Config(
 		max_moves=1000000,#it can be infinity because any 2048 game is bound to end
