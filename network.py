@@ -34,7 +34,7 @@ def support_to_scalar(logits, support_size, from_logits=True):# logits is in sha
 	if support_size==0:
 		return logits
 	if from_logits:
-		probabilities=tf.nn.softmax(logits,axis=0)
+		probabilities=tf.nn.softmax(logits,axis=1)
 	else:
 		probabilities=logits
 	support=tf.range(-support_size,support_size+1,delta=1,dtype=tf.float32)
@@ -431,7 +431,7 @@ class dynamics(tf.keras.Model):
 		self.conv_reward=conv1x1(reduced_channels_reward)
 		self.bn_reward=tf.keras.layers.BatchNormalization()
 		self.flatten=tf.keras.layers.Flatten()
-		self.reward_output=[tf.keras.layers.Dense(size) for size in reward_layers]+[tf.keras.layers.Dense(support*2+1)]
+		self.reward_output=[tf.keras.layers.Dense(size, activation='relu') for size in reward_layers]+[tf.keras.layers.Dense(support*2+1)]
 		self.build([1]+input_shape)
 
 	def call(self,x):
@@ -466,8 +466,8 @@ class prediction(tf.keras.Model):
 		self.conv1x1_value=conv1x1(reduced_channels_value)
 		self.conv1x1_policy=conv1x1(reduced_channels_policy)
 		self.flatten=tf.keras.layers.Flatten()
-		self.dense_value=[tf.keras.layers.Dense(size) for size in value_layers]+[tf.keras.layers.Dense(support*2+1)]
-		self.dense_policy=[tf.keras.layers.Dense(size) for size in policy_layers]+[tf.keras.layers.Dense(action_space_size)]
+		self.dense_value=[tf.keras.layers.Dense(size, activation='relu') for size in value_layers]+[tf.keras.layers.Dense(support*2+1)]
+		self.dense_policy=[tf.keras.layers.Dense(size, activation='relu') for size in policy_layers]+[tf.keras.layers.Dense(action_space_size)]
 		self.build([1]+input_shape)
 
 	def call(self,x):
@@ -601,6 +601,7 @@ class Manager:
 			return future
 		else:
 			features=np.expand_dims(features,axis=0)
+			#sorry for ugly code
 			with tf.device('/device:GPU:0'):
 				if network=='representation':
 					ret=self.representation(features)
@@ -667,7 +668,7 @@ class Manager:
 					hidden_state,reward=results
 					assert hidden_state.shape[0]==len(item_list) and reward.shape[0]==len(item_list), 'sizes of hidden_state('+hidden_state.shape+'), reward('+reward.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
 					if self.support:
-						reward=support_to_scalar(reward,self.support)
+						reward=support_to_scalar(reward,self.support,True)
 					else:
 						reward=tf.reshape(reward,(-1))
 					for i in range(len(item_list)):
@@ -678,7 +679,7 @@ class Manager:
 					policy,value=results
 					assert policy.shape[0]==len(item_list) and value.shape[0]==len(item_list), 'sizes of policy('+policy.shape+'), value('+value.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
 					if self.support:
-						value=support_to_scalar(value,self.support)
+						value=support_to_scalar(value,self.support,True)
 					else:
 						value=tf.reshape(value,(-1))
 					for i in range(len(item_list)):
@@ -711,6 +712,7 @@ class Predictor:
 		'''
 		hidden_state=await self.get_outputs(observation,'representation')#already scaled
 		policy,value=await self.get_outputs(hidden_state,'prediction')
+		print(f'value:{value}')
 		return NetworkOutput(reward=0,hidden_state=hidden_state,value=value,policy=policy)
 
 	async def recurrent_inference(self,hidden_state:np.array,action:np.array)->NetworkOutput:

@@ -61,7 +61,7 @@ class Config:
 		### Network info
 		self.observation_shape=[self.board_size**2+1,self.board_size,self.board_size]
 		self.network_type='resnet'#'resnet'/'fullyconnected'/...
-		self.support=100# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
+		self.support=50# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
 		#this = 0 means not using support. Muzero uses 300, which can represent up to 90000.
 		
 		# Fully Connected Network
@@ -129,10 +129,10 @@ class Config:
 
 		#overall hyperparameters
 		self.training_steps_to_selfplay_steps_ratio=0.4
-		self.training_steps_to_selfplay_steps_ratio=float('inf')#observing training
+		#self.training_steps_to_selfplay_steps_ratio=float('inf')#observing training
 		self.reanalyze_games_to_selfplay_games_ratio=0.8
 		self.selfplay_games_to_test_games_ratio=0.1
-		self.selfplay_games_per_run=5
+		self.selfplay_games_per_run=10
 
 		#manager config
 		self.manager_queue=True

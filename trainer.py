@@ -193,7 +193,7 @@ class Trainer:
 					total_reward_loss+=scale_gradient(reward_loss, 1.0/(self.num_unroll_steps-1))
 					total_policy_loss+=scale_gradient(policy_loss, 1.0/(self.num_unroll_steps-1))
 				if self.config.support:
-					pred_value_scalar = network.support_to_scalar(value, self.config.support)
+					pred_value_scalar = network.support_to_scalar(value, self.config.support, True)
 				else:
 					pred_value_scalar = np.reshape(value,(-1))
 				priorities[:, i] = (
@@ -205,7 +205,7 @@ class Trainer:
 				total_value_loss *= weight_batch
 				total_reward_loss *= weight_batch
 				total_policy_loss *= weight_batch
-			loss = total_value_loss * self.config.loss_weights[0] + total_reward_loss * self.config.loss_weights[1] + total_policy_loss * self.config.loss_weights[2]
+			loss = (total_value_loss * self.config.loss_weights[0] + total_reward_loss * self.config.loss_weights[1] + total_policy_loss * self.config.loss_weights[2])/sum(self.config.loss_weights)
 			'''if self.config.PER:
 				# Correct PER bias by using importance-sampling (IS) weights
 				# this is why value_loss*weight+reward_loss+policy_loss != total_loss

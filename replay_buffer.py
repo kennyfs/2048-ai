@@ -323,10 +323,7 @@ class Reanalyze:
 					for i in range(len(game_history.root_values))
 				]
 				observations=np.array(observations,dtype=np.float32)
-				values = network.support_to_scalar(
-					self.model.initial_inference(observations).value,
-					self.config.support,
-				)
+				values = self.model.initial_inference(observations).value
 				game_history.reanalyzed_predicted_root_values =	tf.squeeze(values).numpy()
 
 				replay_buffer.update_game_history(game_id, game_history)

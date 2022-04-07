@@ -192,6 +192,12 @@ class MuZero:
 		if log_in_tensorboard:
 			self.log_once()'''
 	def train_only(self):
+		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
+
+		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
+
+		self.replay_buffer_worker = replay_buffer.ReplayBuffer(self.checkpoint, self.replay_buffer, self.config)
+
 		self.replay_buffer_worker.load_games(1,10)
 		info=self.replay_buffer_worker.get_info()
 		self.shared_storage_worker.set_info(info)
