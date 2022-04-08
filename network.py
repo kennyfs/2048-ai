@@ -491,11 +491,11 @@ class ResNetNetwork(AbstractNetwork):
 		self.representation_model=representation(
 			config.observation_shape,
 			config.num_channels,
-			config.num_blocks)
+			config.num_blocks-1)
 		self.dynamics_model=dynamics(
 			[config.num_channels+4, config.board_size, config.board_size],
 			config.num_channels,
-			config.num_blocks,
+			config.num_blocks-1,
 			config.reduced_channels_reward,
 			config.reward_layers,
 			config.support)

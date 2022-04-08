@@ -454,58 +454,55 @@ class SelfPlay:
 		if render:
 			print('A new game just started.')
 			game.render()
-		now_type=0
 		while not done and len(game_history.action_history) <= self.config.max_moves:
 			print('flag play_game1')
-			if now_type==0:
-				assert (
-					len(np.array(observation).shape) == 3
-				), f"Observation should be 3 dimensionnal instead of {len(np.array(observation).shape)} dimensionnal. Got observation of shape: {np.array(observation).shape}"
-				assert (
-					list(observation.shape) == self.config.observation_shape
-				), f"Observation should match the observation_shape defined in MuZeroConfig. Expected {self.config.observation_shape} but got {np.array(observation).shape}."
-				'''#This will only be useful if 
-				stacked_observations = game_history.get_stacked_observations(
-					-1,
-					self.config.stacked_observations,
+			assert (
+				len(np.array(observation).shape) == 3
+			), f"Observation should be 3 dimensionnal instead of {len(np.array(observation).shape)} dimensionnal. Got observation of shape: {np.array(observation).shape}"
+			assert (
+				list(observation.shape) == self.config.observation_shape
+			), f"Observation should match the observation_shape defined in MuZeroConfig. Expected {self.config.observation_shape} but got {np.array(observation).shape}."
+			'''#This will only be useful if 
+			stacked_observations = game_history.get_stacked_observations(
+				-1,
+				self.config.stacked_observations,
+			)
+			'''
+			# Choose the action
+			legal_actions=game.legal_actions()
+			root = MCTS(self.config, self.predictor).run(
+				observation,
+				legal_actions,
+				True,
+			)
+			action = self.select_action(
+				root,
+				temperature,
+			)
+
+			if render:
+				#print(f'Tree depth: {mcts_info["max_tree_depth"]}')
+				print(
+					f"Root value : {root.value():.2f}"
 				)
-				'''
-				# Choose the action
-				legal_actions=game.legal_actions()
-				root = MCTS(self.config, self.predictor).run(
-					observation,
-					legal_actions,
-					True,
-				)
-				action = self.select_action(
-					root,
-					temperature,
-				)
+				print(f'visits:{[int(root.children[i].visit_count/self.config.num_simulations*100) if i in root.children else 0 for i in range(4)]}')
+			reward = game.step(action)
+			observation=game.get_features(0)
+			if render:
+				print(f"Played action: {environment.action_to_string(action,self.config.board_size)}")
 
-				if render:
-					#print(f'Tree depth: {mcts_info["max_tree_depth"]}')
-					print(
-						f"Root value : {root.value():.2f}"
-					)
-					print(f'visits:{[int(root.children[i].visit_count/self.config.num_simulations*100) if i in root.children else 0 for i in range(4)]}')
-				reward = game.step(action)
-				observation=game.get_features(0)
-				if render:
-					print(f"Played action: {environment.action_to_string(action,self.config.board_size)}")
-
-				game_history.store_search_statistics(root, self.config.action_space_type0, self.config.winer_takes_all)
+			game_history.store_search_statistics(root, self.config.action_space_type0, self.config.winer_takes_all)
 
 
-				#add a tile
-				addaction=game.add()
-				game_history.add([action,addaction],observation,reward)
-				if render:
-					game.render()
+			#add a tile
+			addaction=game.add()
+			game_history.add([action,addaction],observation,reward)
+			if render:
+				game.render()
 			
 			done=game.finish()
 			print(f'game length:{len(game_history.root_values)}')
 			print('flag play_game2')
-			now_type = 0 if now_type==1 else 1
 		print('flag play_game3')
 		return game_history
 

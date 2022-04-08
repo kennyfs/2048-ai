@@ -59,7 +59,7 @@ class Config:
 		# AlphaZero in board games.
 		self.known_bounds=known_bounds
 		### Network info
-		self.observation_shape=[self.board_size**2+1,self.board_size,self.board_size]
+		self.observation_shape=[self.board_size**2,self.board_size,self.board_size]
 		self.network_type='resnet'#'resnet'/'fullyconnected'/...
 		self.support=50# the size of support (using an array to represent reward and value(discounted), e.g. 3.7=3*0.3+4*0.7, so [0,0,0,0.3,0.7,0...])
 		#this = 0 means not using support. Muzero uses 300, which can represent up to 90000.
@@ -76,14 +76,14 @@ class Config:
 		#Fully Connected Network doesn't work well
 
 		#ResNet Network
-		self.num_channels=128
-		self.num_blocks=10
-		self.reduced_channels_value=16#conv1x1 planes following hidden_state
-		self.reduced_channels_policy=8
-		self.reduced_channels_reward=16
-		self.value_layers=[256]# dense layer sizes following conv1x1 and flatten
-		self.policy_layers=[]
-		self.reward_layers=[256]
+		self.num_channels=64
+		self.num_blocks=5
+		self.reduced_channels_value=12#conv1x1 planes following hidden_state
+		self.reduced_channels_policy=6
+		self.reduced_channels_reward=12
+		self.value_layers=[128]# dense layer sizes following conv1x1 and flatten
+		self.policy_layers=[64]
+		self.reward_layers=[128]
 		
 		### Training
 		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
@@ -96,11 +96,11 @@ class Config:
 		self.checkpoint_interval=int(5e2)
 		self.window_size=int(1e6)#max game cnt stored in replaybuffer
 		self.batch_size=batch_size
-		self.num_unroll_steps=10#for each gamepos chosen to be collected, go forward num_unroll_steps steps(for training dynamics)
+		self.num_unroll_steps=5#for each gamepos chosen to be collected, go forward num_unroll_steps steps(for training dynamics)
 		self.td_steps=td_steps
 		self.optimizer='SGD'
 		self.momentum=0.9
-		self.loss_weights=[0.7,0.5,1]#See paper appendix H Reanalyze
+		self.loss_weights=[0.7,0.4,1.5]#See paper appendix H Reanalyze
 		self.l2_weight=1e-4
 		#value reward policy
 		self.training_steps_per_batch=5
@@ -128,7 +128,7 @@ class Config:
 		self.replay_buffer_size=1000
 
 		#overall hyperparameters
-		self.training_steps_to_selfplay_steps_ratio=0.4
+		self.training_steps_to_selfplay_steps_ratio=0.6
 		#self.training_steps_to_selfplay_steps_ratio=float('inf')#observing training
 		self.reanalyze_games_to_selfplay_games_ratio=0.8
 		self.selfplay_games_to_test_games_ratio=0.1
@@ -150,7 +150,7 @@ def default_config():
 		num_simulations=100,
 		board_size=4,
 		batch_size=256,
-		td_steps=30,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
+		td_steps=60,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
 		#2048 games tend to be very long
 		num_actors=5,
 		lr_init=4e-4,#too high is bad eg. 1e-3
