@@ -4,12 +4,9 @@
 ## 進度  
 （待補）
 ## todo  
-- [X] 整理my_config.py中的順序，讓人比較好理解  
-- [X] 確認資料處理沒問題（主要是replay buffer.py、trainer.py）  
-- [X] 完成ResNet實作  
-- [X] 完善checkpoint的儲存，main.py、network.py  
-- [ ] 主要的流程控制(main.py)  
-- [ ] 修[bug](#bug)
+- [ ] 調整訓練參數讓輸出更理想  
+- [ ] 運用多線程增進selfplay效率  
+- [X] 修[bug](#Bugs)
 ## 理解
 1. value target: bootstrap---value is expectant reward, so expectant score=value+reward in past
 ## 提醒自己
@@ -20,12 +17,13 @@ shared storage中儲存網路不一定要和其他資訊一起儲存
   
 replay buffer、shared storage必須同時用ray或不用ray，否則如果replay buffer用ray、shared storage是普通型態的參數，replay buffer會copy一份shared storage，無法正確修改。  
 解決辦法：replay buffer不要管shared storage中的資訊，要用的時候(結束完selfplay更新)
-## bug
+## Bugs
+### bug1
 偶爾一局遊戲結束時會停住，不知道發生什麼問題，然後很久很久之後出現這樣的錯誤訊息：  
 [2022-03-31 22:18:36,289 E 28676 28964] gcs_server_address_updater.cc:76: Failed to receive the GCS address for 600 times without success. The worker will exit ungracefully. It is because GCS has died. It could be because there was an issue that kills GCS, such as high memory usage triggering OOM killer to kill GCS. Cluster will be highly likely unavailable if you see this log. Please check the log from gcs_server.err.
 以上的bug應該是ray造成的，現在應該不會。  
-  
-目前有發現的問題是：  
+
+### bug2
 ```
 visits:[0, 21, 62, 17]
 Played action: Left
@@ -61,3 +59,8 @@ Traceback (most recent call last):
     return 	(np.array(target_values,dtype=np.float32),
 ValueError: setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (11,) + inhomogeneous part.
 ```
+以上的bug是因為compute target value在network改動後沒有改正，已修正
+### bug3
+reanalyze後的遊戲在產生數據時會需要很長的時間，是tolist、list的差別，已修正
+### bug4
+數據不正常，是因為合併action後，load game時沒有把add action也加入，所以reward都是0，已修正

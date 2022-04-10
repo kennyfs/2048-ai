@@ -1,4 +1,3 @@
-import copy
 import glob
 import os
 import pickle
@@ -105,6 +104,7 @@ class MuZero:
 			"l2_loss": 0,
 			"num_played_games": 0,
 			"num_played_steps": 0,
+			"num_test_games": 0,
 			"num_reanalyzed_games": 0,
 		}
 		self.replay_buffer = {}
@@ -122,8 +122,26 @@ class MuZero:
 		self.predictor=network.Predictor(self.manager,self.config)
 
 		self.summary=self.model.summary()
-
-	def train(self, log_in_tensorboard=True):
+	def reset_model(self):
+		self.config=my_config.default_config()
+		self.file_writer=tf.summary.create_file_writer(self.config.results_path)
+		self.model=network.Network(self.config)
+		del self.manager, self.predictor
+		self.manager=network.Manager(self.config,self.model)
+		self.predictor=network.Predictor(self.manager,self.config)
+	def training_loop(self, counter, training_counter):
+		last_step=0
+		while 1:
+			self.training_worker.run_update_weights(
+				self.replay_buffer_worker, self.shared_storage_worker, 100
+			)
+			counter, training_counter=self.log_once(counter, training_counter, False)
+			training_step=self.shared_storage_worker.get_info('training_step')
+			if training_step==last_step:
+				break
+			last_step=training_step
+		return counter, training_counter
+	def self_play_and_train(self, log_in_tensorboard=True):
 		"""
 		Spawn ray workers and launch the training.
 
@@ -151,6 +169,9 @@ class MuZero:
 		'''
 		#I only have 1 gpu, I don't know the default ray uses, but I'll just not use .options to specify num_gpus
 		# Initialize workers
+		self.checkpoint['num_played_games']=0
+		self.checkpoint['num_played_steps']=0
+		self.checkpoint['training_step']=0
 		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
 
 		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
@@ -174,9 +195,7 @@ class MuZero:
 				info=self.replay_buffer_worker.get_info()
 				self.shared_storage_worker.set_info(info)
 				print('done playing')
-				self.training_worker.run_update_weights(
-					self.replay_buffer_worker, self.shared_storage_worker
-				)
+				counter, training_counter=self.training_loop(counter, training_counter)
 				print('done training')
 				self.reanalyze_worker.reanalyze(
 					self.replay_buffer_worker, self.shared_storage_worker
@@ -192,19 +211,39 @@ class MuZero:
 		if log_in_tensorboard:
 			self.log_once()'''
 	def train_only(self):
+		self.checkpoint['num_played_games']=0
+		self.checkpoint['num_played_steps']=0
+		self.checkpoint['training_step']=0
 		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
 
 		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
 
 		self.replay_buffer_worker = replay_buffer.ReplayBuffer(self.checkpoint, self.replay_buffer, self.config)
-
-		self.replay_buffer_worker.load_games(1,10)
+		
+		self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
+		
+		self.replay_buffer_worker.load_games(1,116)
 		info=self.replay_buffer_worker.get_info()
+		for k,v in info.items():
+			self.checkpoint[k]=v
 		self.shared_storage_worker.set_info(info)
 		print('done playing')
+		self.reanalyze_worker.reanalyze(
+			self.replay_buffer_worker, self.shared_storage_worker
+		)
+		self.reset_model()
+		#If you want to train from scratch
+		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
+		
+		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
+
+		self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
+		
+		counter=0
+		training_counter=self.shared_storage_worker.get_info('training_step')
 		while 1:
 			self.training_worker.run_update_weights(
-				self.replay_buffer_worker, self.shared_storage_worker, 50
+				self.replay_buffer_worker, self.shared_storage_worker, 100, True
 			)
 			counter, training_counter=self.log_once(counter, training_counter, False)
 	def log_once(self, counter, training_counter, test_game=True):
@@ -324,6 +363,7 @@ class MuZero:
 				)
 			else:
 				raise NotImplementedError
+		with self.file_writer.as_default():
 			self.shared_storage_worker.clear_loss()
 			print(
 				f'Last test score: {info["total_reward"]:6d}. Training step: {info["training_step"]}/{self.config.training_steps}. Played games: {info["num_played_games"]}. Loss: {(sum(info["total_loss"])/len(info["total_loss"]) if len(info["total_loss"])>0 else 0):.3f}',
@@ -442,7 +482,8 @@ if __name__ == "__main__":
 		while True:
 			# Configure running options
 			options = [
-				"Train",
+				"Selfplay and Train",
+				"Train only",
 				"Load pretrained model",
 				"Render some self play games",
 				"Test the game manually",
@@ -458,12 +499,14 @@ if __name__ == "__main__":
 				choice = input("Invalid input, enter a number listed above: ")
 			choice = int(choice)
 			if choice == 0:
-				muzero.train()
+				muzero.self_play_and_train()
 			elif choice == 1:
-				muzero.load_model_menu()
+				muzero.train_only()
 			elif choice == 2:
-				muzero.test(render=True, opponent="self", muzero_player=None)
+				muzero.load_model_menu()
 			elif choice == 3:
+				muzero.test(render=True, opponent="self", muzero_player=None)
+			elif choice == 4:
 				env = muzero.Game()
 				env.reset()
 				env.render()

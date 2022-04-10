@@ -51,36 +51,25 @@ class GameHistory:
 
 		self.length = 0#+1 when calling GameHistory.add
 		self.reanalyzed_predicted_root_values = None
+		self.reanalyzed=False
 		# For PER
 		self.priorities = None
 		self.game_priority = None
 
-	def store_search_statistics(self, root, action_space, winer_takes_all=False):
+	def store_search_statistics(self, root, action_space):
 		'''
 		Turn visit count from root into a policy, store policy and valuesss
 		'''
 		if root is not None:
 			sum_visits = sum(child.visit_count for child in root.children.values())
-			if winer_takes_all:
-				visits=[root.children[a].visit_count
-						if a in root.children
-						else 0
-						for a in action_space]
-				mx=max(visits)
-				s=0
-				for v in visits:
-					if v==mx:
-						s+=1
-				self.child_visits.append([1/s if v==mx else 0 for v in visits])
-			else:
-				self.child_visits.append(
-					[
-						root.children[a].visit_count / sum_visits
-						if a in root.children
-						else 0
-						for a in action_space
-					]
-				)
+			self.child_visits.append(
+				[
+					root.children[a].visit_count / sum_visits
+					if a in root.children
+					else 0
+					for a in action_space
+				]
+			)
 
 			self.root_values.append(root.value())
 		else:
@@ -131,7 +120,7 @@ class GameHistory:
 			F.write(f'{self.initial_add[1]}\n')
 			for action,reward,visits,value in zip(self.action_history,self.reward_history,self.child_visits,self.root_values):
 				F.write(f'{action} {reward} {visits} {value}\n')
-	def load(self, file, config, predictor=None):
+	def load(self, file, config, predictor=None, winer_takes_all=False):
 		#about 60 times per second
 		env=environment.Environment(config)
 		with open(file,'r') as F:
@@ -144,11 +133,13 @@ class GameHistory:
 				actions=eval(line[last_index:index])
 				self.action_history.append(actions)
 				reward=env.step(actions[0])
+				env.step(actions[1])#very important
 				self.observation_history.append(env.get_features())
 
 				last_index=index+1
 				index=line.find(' ',last_index)#[last_index,index) is reward
 				self.reward_history.append(reward)
+				assert reward==int(line[last_index:index]),f'computed reward doesn\'t match recorded one {reward}!={line[last_index:index]}'
 
 				if predictor:#means debug
 					env.render()
@@ -170,6 +161,16 @@ class GameHistory:
 				
 				last_index=index+1
 				self.root_values.append(eval(line[last_index:]))
+		if winer_takes_all:
+			for i in range(len(self.child_visits)):
+				mx=max(self.child_visits[i])
+				s=0
+				for v in self.child_visits[i]:
+					if v==mx:
+						s+=1
+				self.child_visits[i]=[1/s if v==mx else 0 for v in self.child_visits[i]]
+		#### 	todo: played games' winer takes all
+		# 		maybe process after save game to file
 		self.length=len(self.root_values)
 	def add(self, action, observation, reward):
 		self.action_history.append(action)
@@ -403,6 +404,10 @@ class SelfPlay:
 		if test_mode:
 			# Take the best action (no exploration) in test mode
 			# This is for log(to tensorboard), in order to see the progress
+			if (shared_storage.get_info('num_test_games')/
+				max(1,shared_storage.get_info('num_played_games'))
+				>self.config.test_games_to_selfplay_games_ratio):
+				return
 			game_history = self.play_game(
 				0,
 				True,
@@ -414,6 +419,7 @@ class SelfPlay:
 					"game_length": len(game_history.action_history) - 1,#first history is initial state
 					"total_reward": sum(game_history.reward_history),#final score in case of 2048
 					"stdev_reward": np.std(game_history.reward_history),
+					"num_test_games": shared_storage.get_info('num_test_games')+1,
 				}
 			)
 			return
@@ -441,13 +447,13 @@ class SelfPlay:
 		# start a whole new game
 		game=self.Game(self.config)
 		game.reset()
-		observation = game.get_features(None)
+		observation = game.get_features()
 		#initial position
 		#training target can be started at a time where the next move is adding move, so keep all observation history
 
 		for _ in range(2):
 			action=game.add()
-			observation=game.get_features(1)
+			observation=game.get_features()
 			game_history.addtile(action)
 		done = False
 
@@ -487,11 +493,11 @@ class SelfPlay:
 				)
 				print(f'visits:{[int(root.children[i].visit_count/self.config.num_simulations*100) if i in root.children else 0 for i in range(4)]}')
 			reward = game.step(action)
-			observation=game.get_features(0)
+			observation=game.get_features()
 			if render:
 				print(f"Played action: {environment.action_to_string(action,self.config.board_size)}")
 
-			game_history.store_search_statistics(root, self.config.action_space_type0, self.config.winer_takes_all)
+			game_history.store_search_statistics(root, self.config.action_space_type0)
 
 
 			#add a tile

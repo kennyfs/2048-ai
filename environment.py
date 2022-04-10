@@ -91,7 +91,9 @@ class Environment:
 				res=self.movealine([self.grid[i][j] for j in range(self.board_size)],True)
 				for j in range(self.board_size):
 					self.grid[i][j]=res[j]
-		
+		else:
+			x,y,num=add_action_to_pos(action,self.board_size)
+			self.grid[x][y]=num
 		return self.score-beforescore
 	def render(self):
 		for i in self.grid:
@@ -144,10 +146,8 @@ class Environment:
 			y=action%self.board_size
 			return self.grid[x][y]==0
 		raise BaseException('action('+str(action)+') out of range (in Environment.valid)')
-	def get_features(self,now_type=None)->np.array:#given grid, return features for Network input
+	def get_features(self)->np.array:#given grid, return features for Network input
 		#10^4 times per second
-		if now_type==None:
-			now_type=0
 		grid=np.array(self.grid)
 		result=[]
 		for i in range(1,self.board_size**2+1):#board_size**2 is max possible tile

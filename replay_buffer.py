@@ -1,6 +1,6 @@
 import copy
 import os
-import time
+import random
 
 import numpy as np
 import tensorflow as tf
@@ -32,7 +32,6 @@ class ReplayBuffer:
 
 	def save_game(self, game_history, save_to_file=True):
 		#error seems to be somewhere in this function
-		print('save_game1')
 		if self.config.PER:
 			if game_history.priorities is not None:
 				# Avoid read only array when loading replay buffer from disk
@@ -51,7 +50,6 @@ class ReplayBuffer:
 
 				game_history.priorities = np.array(priorities, dtype="float32")
 				game_history.game_priority = np.max(game_history.priorities)
-		print('save_game2')
 		self.buffer[self.num_played_games] = game_history
 		self.num_played_games += 1
 		self.num_played_steps += game_history.length
@@ -62,10 +60,8 @@ class ReplayBuffer:
 			self.total_samples -= self.buffer[del_id].length
 			del self.buffer[del_id]
 
-		print('save_game3')
 		if self.config.save_game_to_file and save_to_file:
 			game_history.save(os.path.join(self.config.save_game_dir, f'{self.num_played_games}.record'))
-		print('save_game4')
 	def get_info(self):
 		return {"num_played_games":self.num_played_games,"num_played_steps":self.num_played_steps}
 	def load_games(self, first_game_id, last_game_id):
@@ -214,27 +210,23 @@ class ReplayBuffer:
 					self.buffer[game_id].priorities
 				)
 
-	def compute_target_value(self, game_history, index):
+	def compute_target_value(self, game_history:self_play.GameHistory, index):
 		# The value target is the discounted root value of the search tree td_steps into the
 		# future, plus the discounted sum of all rewards until then.
 		bootstrap_index = index + self.config.td_steps
 		if bootstrap_index < game_history.length:
-			root_values = (
-				game_history.root_values
-				if game_history.reanalyzed_predicted_root_values is None
-				else game_history.reanalyzed_predicted_root_values
-			)
+			if game_history.reanalyzed:
+				root_values=game_history.reanalyzed_predicted_root_values
+			else:
+				root_values=game_history.root_values
 			last_step_value = root_values[bootstrap_index]
 
-			value = last_step_value * self.config.discount ** self.config.td_steps
+			value = last_step_value * self.config.discount_to_n[self.config.td_steps]
 		else:
 			value = 0
-		dis=1.
-		for reward in game_history.reward_history[index + 1 : min(game_history.length,bootstrap_index + 1)]:
+		for i,reward in enumerate(game_history.reward_history[index + 1 : min(game_history.length,bootstrap_index + 1)]):
 			# The value is oriented from the perspective of the current player
-			value += reward * dis
-			dis*=self.config.discount
-
+			value += reward * self.config.discount_to_n[i]
 		return value
 	def make_target(self, game_history, state_index):
 		"""
@@ -299,7 +291,7 @@ class Reanalyze:
 
 	def __init__(self, initial_checkpoint, model:network.Network, config:my_config.Config):
 		self.config = config
-
+		self.support = config.support
 		# Fix random generator seed
 		np.random.seed(self.config.seed)
 		tf.random.set_seed(self.config.seed)
@@ -310,24 +302,25 @@ class Reanalyze:
 		self.num_reanalyzed_games = initial_checkpoint["num_reanalyzed_games"]
 
 	def reanalyze(self, replay_buffer, shared_storage):
-		if self.config.reanalyze:
-			while (self.num_reanalyzed_games / max(1,shared_storage.get_info('num_played_games'))
-				< self.config.reanalyze_games_to_selfplay_games_ratio):
 
-				game_id, game_history, _ = replay_buffer.sample_game(force_uniform=True)
+		for game_id, game_history in replay_buffer.buffer.items():
 
-				# Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
-				
-				observations = [
-					game_history.get_observation(i)
-					for i in range(len(game_history.root_values))
-				]
-				observations=np.array(observations,dtype=np.float32)
-				values = self.model.initial_inference(observations).value
-				game_history.reanalyzed_predicted_root_values =	tf.squeeze(values).numpy()
+			# Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
+			
+			observations = [
+				game_history.get_observation(i)
+				for i in range(len(game_history.root_values))
+			]
+			observations=np.array(observations,dtype=np.float32)
+			values = self.model.initial_inference(observations).value
+			values = network.support_to_scalar(values, self.support, True)
+			values = values.numpy().tolist()
+			#It's important to use values.tolist() not list(values) due to efficiency problem.
+			game_history.reanalyzed_predicted_root_values =	values
+			game_history.reanalyzed=True
 
-				replay_buffer.update_game_history(game_id, game_history)
-				self.num_reanalyzed_games += 1
-				shared_storage.set_info(
-					"num_reanalyzed_games", self.num_reanalyzed_games
-				)
+			replay_buffer.update_game_history(game_id, game_history)
+			self.num_reanalyzed_games += 1
+			shared_storage.set_info(
+				"num_reanalyzed_games", self.num_reanalyzed_games
+			)

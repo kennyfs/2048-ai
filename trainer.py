@@ -1,4 +1,5 @@
 import copy
+import random
 import time
 
 import numpy as np
@@ -44,7 +45,7 @@ class Trainer:
 				f"{self.config.optimizer} is not implemented. You can change the optimizer manually in trainer.py."
 			)
 
-	def run_update_weights(self, replay_buffer, shared_storage, max_steps=None):#max_steps is for observing loss
+	def run_update_weights(self, replay_buffer, shared_storage, max_steps=None, force_training:bool=False):#max_steps is for observing loss
 		# Wait for the replay buffer to be filled
 		assert shared_storage.get_info("num_played_games") > 0, 'no enough games, get 0'
 		self.training_step=shared_storage.get_info('training_step')
@@ -56,7 +57,9 @@ class Trainer:
 				1, shared_storage.get_info("num_played_steps"))
 				< self.config.training_steps_to_selfplay_steps_ratio
 				and
-				self.training_step < self.config.training_steps):
+				self.training_step < self.config.training_steps
+				or
+				force_training):
 			st=time.time()
 			index_batch, batch = next_batch
 			print(f'generating data consumed {time.time()-st} seconds.')
@@ -112,6 +115,12 @@ class Trainer:
 		#for debug, check the shape of the batch, maybe is useful
 		#for b in batch:
 		#	print(b.shape)
+		if random.random()<0.1:
+			#It's important to check data sometimes, because the data is not always good.
+			print('training')
+			print(f'value:{target_value_batch[0,:]}')
+			print(f'reward:{target_reward_batch[0,:]}')
+			print(f'policy:{target_policy_batch[0,:]}')
 		# Keep values as scalars for calculating the priorities for the prioritized replay
 		target_value_scalar = np.copy(target_value_batch)
 		priorities = np.zeros_like(target_value_scalar)
