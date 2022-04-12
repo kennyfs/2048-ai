@@ -159,6 +159,14 @@ class Environment:
 		result=np.concatenate([np.expand_dims(np.where(grid==i,1.0,0.0),0) for i in range(1,self.board_size**2+1)],axis=0)
 		return result
 		'''
+	def human_to_action(self):
+		action=input('Enter a action(UDLR or 1234):')
+		d={'U':0,'D':1,'L':2,'R':3,'1':0,'2':1,'3':2,'4':3}
+		action=d[action]
+		while self.valid(action)==False:
+			action=input('Invalid action, try again:')
+			action=d[action]
+		return action
 
 def add_pos_to_action(x,y,num,board_size):
 	return 4+x*board_size+y+(num-1)*board_size**2

@@ -5,8 +5,8 @@
 （待補）
 ## todo  
 - [ ] 調整訓練參數讓輸出更理想  
-- [ ] 運用多線程增進selfplay效率  
-- [ ] 隨機產生遊戲
+- [ ] 運用多線程增進selfplay效率(似乎有點難)  
+- [X] 隨機產生遊戲
 - [X] 修[bug](#Bugs)，目前沒什麼bug
 ## 理解
 1. value target: bootstrap---value is expectant reward, so expectant score=value+reward in past

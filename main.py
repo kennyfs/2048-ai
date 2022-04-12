@@ -141,7 +141,7 @@ class MuZero:
 				break
 			last_step=training_step
 		return counter, training_counter
-	def self_play_and_train(self, log_in_tensorboard=True):
+	def self_play_and_train(self, log_in_tensorboard=True, random=False, render:bool=False):
 		"""
 		Spawn ray workers and launch the training.
 
@@ -188,7 +188,7 @@ class MuZero:
 		try:
 			while 1:
 				self.self_play_worker.self_play(
-					self.replay_buffer_worker, self.shared_storage_worker
+					self.replay_buffer_worker, self.shared_storage_worker, random=random, render=render
 				)
 				#if want to load existing game:
 				#self.replay_buffer_worker.load_games(1,5)
@@ -485,7 +485,7 @@ if __name__ == "__main__":
 				"Selfplay and Train",
 				"Train only",
 				"Load pretrained model",
-				"Render some self play games",
+				"Generate random games and Train"
 				"Test the game manually",
 				"Exit",
 			]
@@ -499,13 +499,13 @@ if __name__ == "__main__":
 				choice = input("Invalid input, enter a number listed above: ")
 			choice = int(choice)
 			if choice == 0:
-				muzero.self_play_and_train()
+				muzero.self_play_and_train(render=True)
 			elif choice == 1:
 				muzero.train_only()
 			elif choice == 2:
 				muzero.load_model_menu()
 			elif choice == 3:
-				muzero.test(render=True, opponent="self", muzero_player=None)
+				muzero.self_play_and_train(random=True, render=True)
 			elif choice == 4:
 				env = muzero.Game()
 				env.reset()
@@ -514,7 +514,7 @@ if __name__ == "__main__":
 				done = False
 				while not done:
 					action = env.human_to_action()
-					observation, reward, done = env.step(action)
+					reward = env.step(action)
 					print(f"\nAction: {environment.action_to_string(action)}\nReward: {reward}")
 					env.render()
 			else:

@@ -56,7 +56,7 @@ class GameHistory:
 		self.priorities = None
 		self.game_priority = None
 
-	def store_search_statistics(self, root, action_space):
+	def store_search_statistics(self, root=None, action_space=None):
 		'''
 		Turn visit count from root into a policy, store policy and valuesss
 		'''
@@ -73,8 +73,8 @@ class GameHistory:
 
 			self.root_values.append(root.value())
 		else:
-			raise BaseException('store_search_statistics receive root as None')
-
+			self.child_visits.append([1/len(action_space) for i in range(len(action_space))])
+			self.root_values.append(0)
 	def get_stacked_observations(self, index, num_stacked_observations):
 		"""
 		Generate a new observation with the observation at the index position
@@ -400,7 +400,7 @@ class SelfPlay:
 		# should initialize manager, predictor at main.py, all selfplayer(self_play_worker*num_actors and test_worker*1)
 		self.predictor=predictor
 
-	def self_play(self, replay_buffer, shared_storage, test_mode=False):
+	def self_play(self, replay_buffer, shared_storage, test_mode=False, random:bool=False, render:bool=False):
 		if test_mode:
 			# Take the best action (no exploration) in test mode
 			# This is for log(to tensorboard), in order to see the progress
@@ -428,12 +428,15 @@ class SelfPlay:
 			#self.predictor.manager.set_weights(shared_storage.get_info("weights"))
 
 			print('flag self_play1')
-			game_history=self.play_game(
-				self.config.visit_softmax_temperature_fn(
-					training_steps=shared_storage.get_info("training_step")
-				),
-				True,### if you want to render, change this
-			)
+			if random:
+				game_history=self.play_random_game(render)
+			else:
+				game_history=self.play_game(
+					self.config.visit_softmax_temperature_fn(
+						training_steps=shared_storage.get_info("training_step")
+					),
+					render,### if you want to render, change main.py
+				)
 			print('flag self_play2')
 			replay_buffer.save_game(game_history)#error seems to be here
 			print('flag self_play3')
@@ -447,13 +450,11 @@ class SelfPlay:
 		# start a whole new game
 		game=self.Game(self.config)
 		game.reset()
-		observation = game.get_features()
 		#initial position
 		#training target can be started at a time where the next move is adding move, so keep all observation history
 
 		for _ in range(2):
 			action=game.add()
-			observation=game.get_features()
 			game_history.addtile(action)
 		done = False
 
@@ -492,8 +493,8 @@ class SelfPlay:
 					f"Root value : {root.value():.2f}"
 				)
 				print(f'visits:{[int(root.children[i].visit_count/self.config.num_simulations*100) if i in root.children else 0 for i in range(4)]}')
+			observation=game.get_features()###### severe bug!!!!
 			reward = game.step(action)
-			observation=game.get_features()
 			if render:
 				print(f"Played action: {environment.action_to_string(action,self.config.board_size)}")
 
@@ -536,6 +537,29 @@ class SelfPlay:
 			action = np.random.choice(actions, p=visit_count_distribution)
 
 		return action
+	def play_random_game(self, render):
+		"""
+		Play a game with a random policy.
+		"""
+		game_history = GameHistory()
+		game = self.Game(self.config)
+		game.reset()
+		done = False
+		for _ in range(2):
+			action=game.add()
+			game_history.addtile(action)
+		while not done and len(game_history.action_history) <= self.config.max_moves:
+			action = np.random.choice(game.legal_actions())
+			observation=game.get_features()
+			reward = game.step(action)
+			addaction=game.add()
+			game_history.add([action,addaction],observation,reward)
+			game_history.store_search_statistics(None, self.config.action_space_type0)
+			done = game.finish()
+			if render:
+				game.render()
+			print(f'game length:{len(game_history.root_values)}')
+		return game_history
 #show a game(for debugging)
 if __name__=='__main__':
 	con=my_config.default_config()
