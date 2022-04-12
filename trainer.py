@@ -93,8 +93,8 @@ class Trainer:
 			print(f'ratio:{self.training_step / max(1, shared_storage.get_info("num_played_steps"))}')
 			if max_steps!=None and self.training_step-start_step>=max_steps:
 				break
-		shared_storage.save_weights(copy.deepcopy(self.model.get_weights()))
-		shared_storage.save()
+		#shared_storage.save_weights(copy.deepcopy(self.model.get_weights()))
+		#shared_storage.save()
 		# loss log:
 		# clear losses saved in shared storage when training start. 
 		# train until training to selfplay steps ratio is up to the config.

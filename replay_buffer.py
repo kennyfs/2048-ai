@@ -69,6 +69,7 @@ class ReplayBuffer:
 			game_history=self_play.GameHistory()
 			game_history.load(os.path.join(self.config.load_game_dir,f'{i}.record'),self.config)
 			self.save_game(game_history, save_to_file=False)
+		print(f'initialize with {last_game_id-first_game_id+1} games.')
 	def get_buffer(self):
 		return self.buffer
 	def get_batch(self):

@@ -184,7 +184,7 @@ class MuZero:
 
 		# Launch workers
 		counter=0
-		training_counter=0
+		training_counter=self.shared_storage_worker.get_info('training_step')//self.config.training_steps_per_batch
 		try:
 			while 1:
 				self.self_play_worker.self_play(
@@ -210,10 +210,11 @@ class MuZero:
 		'''
 		if log_in_tensorboard:
 			self.log_once()'''
-	def train_only(self):
+	def train_only(self, reset_model):
 		self.checkpoint['num_played_games']=0
 		self.checkpoint['num_played_steps']=0
-		self.checkpoint['training_step']=0
+		if reset_model:
+			self.checkpoint['training_step']=0
 		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
 
 		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
@@ -222,7 +223,12 @@ class MuZero:
 		
 		self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
 		
-		self.replay_buffer_worker.load_games(1,116)
+		last_game_id=0
+		while 1:
+			if not os.path.isfile(os.path.join(self.config.load_game_dir,f'{last_game_id+1}.record')):
+				break
+			last_game_id+=1
+		self.replay_buffer_worker.load_games(1,last_game_id)
 		info=self.replay_buffer_worker.get_info()
 		for k,v in info.items():
 			self.checkpoint[k]=v
@@ -231,16 +237,17 @@ class MuZero:
 		self.reanalyze_worker.reanalyze(
 			self.replay_buffer_worker, self.shared_storage_worker
 		)
-		self.reset_model()
-		#If you want to train from scratch
-		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
-		
-		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
+		if reset_model:
+			self.reset_model()
+			#If you want to train from scratch
+			self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
 
-		self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
+			self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
+
+			self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
 		
 		counter=0
-		training_counter=self.shared_storage_worker.get_info('training_step')
+		training_counter=self.shared_storage_worker.get_info('training_step')//self.config.training_steps_per_batch
 		while 1:
 			self.training_worker.run_update_weights(
 				self.replay_buffer_worker, self.shared_storage_worker, 100, True
@@ -485,7 +492,7 @@ if __name__ == "__main__":
 				"Selfplay and Train",
 				"Train only",
 				"Load pretrained model",
-				"Generate random games and Train"
+				"Generate random games and Train",
 				"Test the game manually",
 				"Exit",
 			]
@@ -499,9 +506,12 @@ if __name__ == "__main__":
 				choice = input("Invalid input, enter a number listed above: ")
 			choice = int(choice)
 			if choice == 0:
-				muzero.self_play_and_train(render=True)
+				muzero.self_play_and_train(random=False, render=True)
 			elif choice == 1:
-				muzero.train_only()
+				res=input('train from scratch? (y/n)').strip().lower()
+				while res not in ('y','n'):
+					res=input('invalid input, enter y or n: ').strip().lower()
+				muzero.train_only(res.lower()=='y')
 			elif choice == 2:
 				muzero.load_model_menu()
 			elif choice == 3:

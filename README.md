@@ -8,6 +8,7 @@
 - [ ] 運用多線程增進selfplay效率(似乎有點難)  
 - [X] 隨機產生遊戲
 - [X] 修[bug](#Bugs)，目前沒什麼bug
+- [ ] log更多資訊（如：隨機取樣輸出、lr）
 ## 理解
 1. value target: bootstrap---value is expectant reward, so expectant score=value+reward in past
 ## 提醒自己
