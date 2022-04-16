@@ -34,7 +34,7 @@ def support_to_scalar(logits, support_size, from_logits=True):# logits is in sha
 	if support_size==0:
 		return logits
 	if from_logits:
-		probabilities=tf.nn.softmax(logits,axis=1)
+		probabilities=tf.nn.softmax(logits,axis=-1)
 	else:
 		probabilities=logits
 	support=tf.range(-support_size,support_size+1,delta=1,dtype=tf.float32)

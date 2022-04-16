@@ -76,21 +76,24 @@ class Config:
 		#Fully Connected Network doesn't work well
 
 		#ResNet Network
-		self.num_channels=96
-		self.num_blocks=8
+		self.num_channels=64
+		self.num_blocks=5
 		#smaller network doesn't work well, all value output is about 170~200 and reward outputs are about 6
 		self.reduced_channels_value=12#conv1x1 planes following hidden_state
 		self.reduced_channels_policy=12
 		self.reduced_channels_reward=12
-		self.value_layers=[64,64]# dense layer sizes following conv1x1 and flatten
-		self.policy_layers=[64,16]
-		self.reward_layers=[64,64]
+		self.value_layers=[128]# dense layer sizes following conv1x1 and flatten
+		self.policy_layers=[]
+		self.reward_layers=[128]
 		
 		### Training
 		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
 		os.mkdir(self.results_path)
-		self.load_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v2", 'resnet')
-		self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v2", 'resnet')
+		self.load_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v3", 'resnet')
+		self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v3", 'resnet')
+		assert os.path.isdir(self.load_game_dir)
+		assert os.path.isdir(self.save_game_dir)
+		#self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v2", 'random')
 		#change dir if you want
 		#haven't change game loading path in replay_buffer.py
 		self.training_steps=int(100e3)
@@ -99,15 +102,15 @@ class Config:
 		self.batch_size=batch_size
 		self.num_unroll_steps=5#for each gamepos chosen to be collected, go forward num_unroll_steps steps(for training dynamics)
 		self.td_steps=td_steps
-		self.optimizer='SGD'
+		self.optimizer='Adam'
 		self.momentum=0.9
-		self.loss_weights=[2,2,6]#See paper appendix H Reanalyze
+		self.loss_weights=[1,4,4]#See paper appendix H Reanalyze
 		s=sum(self.loss_weights)
 		for i in range(3):
 			self.loss_weights[i]/=s
-		self.l2_weight=1e-3
+		self.l2_weight=1e-3 if self.optimizer=='SGD' else 1e-4
 		#value reward policy
-		self.training_steps_per_batch=5
+		self.training_steps_per_batch=10
 		self.save_model=True
 		#self.weight_decay=1e-4 #useless for now
 		self.discount_to_n=[self.discount**i for i in range(self.td_steps+5)]
@@ -133,7 +136,8 @@ class Config:
 		self.replay_buffer_size=1000
 
 		#overall hyperparameters
-		self.training_steps_to_selfplay_steps_ratio=0.5#don't need to be very high(e.g. 1,1.2)
+		self.training_steps_to_selfplay_steps_ratio=1.6
+		#don't need to be very high(e.g. 1,1.2)
 		#self.training_steps_to_selfplay_steps_ratio=float('inf')#observing training
 		#self.reanalyze_games_to_selfplay_games_ratio=0.8
 		#reanalyze all games, as it doesn't take much time.
@@ -159,6 +163,7 @@ def default_config():
 		td_steps=60,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
 		#2048 games tend to be very long
 		num_actors=5,
-		lr_init=4e-4,#too high is bad eg. 1e-3
+		#lr_init=1.,#for adadelta
+		lr_init=5e-4,
 		lr_decay_steps=20e3,
 		visit_softmax_temperature_fn=default_visit_softmax_temperature)

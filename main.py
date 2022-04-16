@@ -171,7 +171,7 @@ class MuZero:
 		# Initialize workers
 		self.checkpoint['num_played_games']=0
 		self.checkpoint['num_played_steps']=0
-		self.checkpoint['training_step']=0
+		#self.checkpoint['training_step']=0
 		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
 
 		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
@@ -292,12 +292,19 @@ class MuZero:
 				"stdev_reward",
 				#from trainer
 				"training_step",
-				#"learning_rate",
+				"learning_rate",
 				"total_loss",
 				"value_loss",
 				"reward_loss",
 				"policy_loss",
 				"l2_loss",
+
+				'value_initial',
+				'value_recurrent',
+				'reward',
+				'value_initial_delta',
+				'value_recurrent_delta',
+				'reward_delta',
 				#from self_play_worker, not too important
 				"num_played_games",
 				"num_played_steps",
@@ -324,31 +331,51 @@ class MuZero:
 				"2.Self_play_worker/3.num_reanalyzed_games", info["num_reanalyzed_games"], counter
 			)
 			log_training_config=1
+			tf.summary.scalar(
+				"3.Trainer_worker/1.learning_rate", info["learning_rate"], training_counter
+			)
 			if log_training_config==1:
 				#log all loss
-				for total_loss,value_loss,reward_loss,policy_loss,l2_loss in zip(info["total_loss"],info["value_loss"],info["reward_loss"],info["policy_loss"],info["l2_loss"]):
+				for total_loss,value_loss,reward_loss,policy_loss,l2_loss,value_initial,value_recurrent,reward,value_initial_delta,value_recurrent_delta,reward_delta in zip(info["total_loss"],info["value_loss"],info["reward_loss"],info["policy_loss"],info["l2_loss"],info['value_initial'],info['value_recurrent'],info['reward'],info['value_initial_delta'],info['value_recurrent_delta'],info['reward_delta']):
 					#tf.summary.scalar(
 					#	"3.Trainer_worker/1.training_step", training_step, training_counter,
 					#)
-					#tf.summary.scalar(
-					#	"3.Trainer_worker/2.learning_rate", learning_rate, training_counter
-					#)
 					tf.summary.scalar(
-						"3.Trainer_worker/1.total_loss", total_loss, training_counter
+						"3.Trainer_worker/2.total_loss", total_loss, training_counter
 					)
 					tf.summary.scalar(
-						"3.Trainer_worker/2.value_loss", value_loss, training_counter
+						"3.Trainer_worker/3.value_loss", value_loss, training_counter
 					)
 					tf.summary.scalar(
-						"3.Trainer_worker/3.reward_loss", reward_loss, training_counter
+						"3.Trainer_worker/4.reward_loss", reward_loss, training_counter
 					)
 					tf.summary.scalar(
-						"3.Trainer_worker/4.policy_loss", policy_loss, training_counter
+						"3.Trainer_worker/5.policy_loss", policy_loss, training_counter
 					)
 					tf.summary.scalar(
-						"3.Trainer_worker/5.l2_loss", l2_loss, training_counter
+						"3.Trainer_worker/6.l2_loss", l2_loss, training_counter
+					)
+
+					tf.summary.scalar(
+						"4.Training_output/1.value_initial", value_initial, training_counter
+					)
+					tf.summary.scalar(
+						"4.Training_output/2.value_recurrent", value_recurrent, training_counter
+					)
+					tf.summary.scalar(
+						"4.Training_output/3.reward", reward, training_counter
+					)
+					tf.summary.scalar(
+						"4.Training_output/4.value_initial_delta", value_initial_delta, training_counter
+					)
+					tf.summary.scalar(
+						"4.Training_output/5.value_recurrent_delta", value_recurrent_delta, training_counter
+					)
+					tf.summary.scalar(
+						"4.Training_output/6.reward_delta", reward_delta, training_counter
 					)
 					training_counter+=1
+				
 			elif log_training_config==2:
 				#log mean of loss
 				length=len(info["total_loss"])
@@ -492,7 +519,7 @@ if __name__ == "__main__":
 				"Selfplay and Train",
 				"Train only",
 				"Load pretrained model",
-				"Generate random games and Train",
+				"Generate random games",
 				"Test the game manually",
 				"Exit",
 			]
@@ -515,7 +542,7 @@ if __name__ == "__main__":
 			elif choice == 2:
 				muzero.load_model_menu()
 			elif choice == 3:
-				muzero.self_play_and_train(random=True, render=True)
+				muzero.self_play_and_train(random=True, render=False)
 			elif choice == 4:
 				env = muzero.Game()
 				env.reset()

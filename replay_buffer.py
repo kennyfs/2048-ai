@@ -72,7 +72,7 @@ class ReplayBuffer:
 		print(f'initialize with {last_game_id-first_game_id+1} games.')
 	def get_buffer(self):
 		return self.buffer
-	def get_batch(self):
+	def get_batch(self, batch_size):
 		#samples always start from state followed by actions of type 0 (move)
 		#return type: np.array
 		(
@@ -85,7 +85,7 @@ class ReplayBuffer:
 		) = ([], [], [], [], [], [])
 		weight_batch = [] if self.config.PER else None
 
-		for game_id, game_history, game_prob in self.sample_n_games(self.config.batch_size):
+		for game_id, game_history, game_prob in self.sample_n_games(batch_size):
 			game_pos, pos_prob = self.sample_position(game_history)
 
 			values, rewards, policies, actions = self.make_target(

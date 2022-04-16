@@ -36,8 +36,12 @@ class Trainer:
 				learning_rate=self.config.learning_rate_init,
 				momentum=self.config.momentum,
 			)
-		elif self.config.optimizer == "Adam":
+		elif self.config.optimizer == "Adam":#the best
 			self.optimizer = tf.keras.optimizers.Adam(
+				learning_rate=self.config.learning_rate_init,
+			)
+		elif self.config.optimizer == "Adadelta":
+			self.optimizer = tf.keras.optimizers.Adadelta(
 				learning_rate=self.config.learning_rate_init,
 			)
 		else:
@@ -49,9 +53,9 @@ class Trainer:
 		# Wait for the replay buffer to be filled
 		assert shared_storage.get_info("num_played_games") > 0, 'no enough games, get 0'
 		self.training_step=shared_storage.get_info('training_step')
-		next_batch = replay_buffer.get_batch()
 		# Training loop
 		shared_storage.clear_loss()
+		shared_storage.clear_output()
 		start_step=self.training_step
 		while (self.training_step / max(
 				1, shared_storage.get_info("num_played_steps"))
@@ -61,10 +65,10 @@ class Trainer:
 				or
 				force_training):
 			st=time.time()
-			index_batch, batch = next_batch
+			index_batch, batch = replay_buffer.get_batch(self.batch_size)
 			print(f'generating data consumed {time.time()-st} seconds.')
-			next_batch = replay_buffer.get_batch()
-			self.update_learning_rate()
+			if self.config.optimizer!='Adadelta':
+				self.update_learning_rate()
 			print(f'training_step:{self.training_step},lr={self.optimizer.learning_rate}')
 			st=time.time()
 			(
@@ -74,6 +78,13 @@ class Trainer:
 				reward_loss,
 				policy_loss,
 				l2_loss,
+
+				value_initial,
+				value_recurrent,
+				reward,
+				value_initial_delta,
+				value_recurrent_delta,
+				reward_delta,
 			) = self.update_weights(batch, shared_storage)
 			print(f'training consumed {time.time()-st} seconds.')
 
@@ -85,10 +96,11 @@ class Trainer:
 			shared_storage.set_info(
 				{
 					"training_step": self.training_step,
-					#"learning_rate": self.optimizer.learning_rate,
+					"learning_rate": self.optimizer.learning_rate,
 				}
 			)
 			shared_storage.append_loss(total_loss,value_loss,reward_loss,policy_loss,l2_loss)
+			shared_storage.append_output(value_initial,value_recurrent,reward,value_initial_delta,value_recurrent_delta,reward_delta)
 			# Managing the self-play / training ratio
 			print(f'ratio:{self.training_step / max(1, shared_storage.get_info("num_played_steps"))}')
 			if max_steps!=None and self.training_step-start_step>=max_steps:
@@ -123,6 +135,7 @@ class Trainer:
 			print(f'policy:{target_policy_batch[0,:]}')
 		# Keep values as scalars for calculating the priorities for the prioritized replay
 		target_value_scalar = np.copy(target_value_batch)
+		target_reward_scalar = np.copy(target_reward_batch)
 		priorities = np.zeros_like(target_value_scalar)
 
 		# observation_batch: batch, channels, height, width
@@ -159,6 +172,13 @@ class Trainer:
 		last_reward_loss=tmp()
 		last_policy_loss=tmp()
 		last_l2_loss=tmp()
+
+		last_value_initial=tmp()
+		last_value_recurrent=tmp()
+		last_value_initial_delta=tmp()
+		last_value_recurrent_delta=tmp()
+		last_reward=tmp()
+		last_reward_delta=tmp()
 		## Generate predictions
 		def loss_fn():
 			output=self.model.initial_inference(
@@ -205,6 +225,18 @@ class Trainer:
 					pred_value_scalar = network.support_to_scalar(value, self.config.support, True)
 				else:
 					pred_value_scalar = np.reshape(value,(-1))
+				if i==0:
+					index=np.random.choice(len(pred_value_scalar))
+					last_value_initial_delta.set(pred_value_scalar[index]-target_value_scalar[index][i])
+					last_value_initial.set(pred_value_scalar[index])
+				elif i==1:
+					index=np.random.choice(len(pred_value_scalar))
+					last_value_recurrent_delta.set(pred_value_scalar[index]-target_value_scalar[index][i])
+					last_value_recurrent.set(pred_value_scalar[index])
+					index=np.random.choice(len(pred_value_scalar))
+					reward=np.expand_dims(reward[index],0)
+					last_reward_delta.set(network.support_to_scalar(reward, self.config.support, True)[0].numpy()-target_reward_scalar[index][i])
+					last_reward.set(network.support_to_scalar(reward, self.config.support, True)[0].numpy())
 				priorities[:, i] = (
 					np.abs(pred_value_scalar - target_value_scalar[:, i])
 					** self.config.PER_alpha
@@ -250,7 +282,14 @@ last_l2_loss:{last_l2_loss.value}''')
 			last_value_loss.value,
 			last_reward_loss.value,
 			last_policy_loss.value,
-			last_l2_loss.value
+			last_l2_loss.value,
+
+			last_value_initial.value,
+			last_value_recurrent.value,
+			last_reward.value,
+			last_value_initial_delta.value,
+			last_value_recurrent_delta.value,
+			last_reward_delta.value,
 		)
 
 	def update_learning_rate(self):

@@ -442,7 +442,7 @@ class SelfPlay:
 			print('flag self_play3')
 			total+=1
 	
-	def play_game(self, temperature, render:bool, game_id:int=-5):#for this single game, seed should be self.seed+game_id
+	def play_game(self, temperature, render:bool):#for this single game, seed should be self.seed+game_id
 		"""
 		Play one game with actions based on the Monte Carlo tree search at each moves.
 		"""
@@ -462,6 +462,7 @@ class SelfPlay:
 			print('A new game just started.')
 			game.render()
 		while not done and len(game_history.action_history) <= self.config.max_moves:
+			observation=game.get_features()
 			print('flag play_game1')
 			assert (
 				len(np.array(observation).shape) == 3
@@ -493,7 +494,6 @@ class SelfPlay:
 					f"Root value : {root.value():.2f}"
 				)
 				print(f'visits:{[int(root.children[i].visit_count/self.config.num_simulations*100) if i in root.children else 0 for i in range(4)]}')
-			observation=game.get_features()###### severe bug!!!!
 			reward = game.step(action)
 			if render:
 				print(f"Played action: {environment.action_to_string(action,self.config.board_size)}")
