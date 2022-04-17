@@ -4,9 +4,9 @@ import datetime
 
 def default_visit_softmax_temperature(num_moves=0,training_steps=0):
 	if training_steps < 50e3:
-		return 0.75
-	elif training_steps < 75e3:
 		return 0.5
+	elif training_steps < 75e3:
+		return 0.3
 	else:
 	 	return 0.25
 
@@ -76,21 +76,23 @@ class Config:
 		#Fully Connected Network doesn't work well
 
 		#ResNet Network
-		self.num_channels=64
-		self.num_blocks=5
+		self.num_channels=128
+		self.num_blocks=3
 		#smaller network doesn't work well, all value output is about 170~200 and reward outputs are about 6
-		self.reduced_channels_value=12#conv1x1 planes following hidden_state
-		self.reduced_channels_policy=12
-		self.reduced_channels_reward=12
+		self.reduced_channels_value=4#conv1x1 planes following hidden_state
+		self.reduced_channels_policy=1
+		self.reduced_channels_reward=4
 		self.value_layers=[128]# dense layer sizes following conv1x1 and flatten
 		self.policy_layers=[]
 		self.reward_layers=[128]
 		
 		### Training
 		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
-		os.mkdir(self.results_path)
-		self.load_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v3", 'resnet')
-		self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v3", 'resnet')
+		if not os.path.isdir(self.results_path):
+			os.mkdir(self.results_path)
+		
+		self.load_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v4", 'resnet')
+		self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v4", 'resnet')
 		assert os.path.isdir(self.load_game_dir)
 		assert os.path.isdir(self.save_game_dir)
 		#self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v2", 'random')
@@ -117,12 +119,12 @@ class Config:
 
 		#Exponential learning rate schedule
 		self.learning_rate_init=lr_init
-		self.learning_rate_decay_rate=0.5#more intuitive to use 0.5
+		self.learning_rate_decay_rate=1.0#more intuitive to use 0.5
 		self.learning_rate_decay_steps=lr_decay_steps
 
 		self.seed=None
 
-		self.PER=True
+		self.PER=False
 		self.PER_alpha=1
 
 		self.debug=False
@@ -133,37 +135,40 @@ class Config:
 		#self.log_delay=2.0
 
 
-		self.replay_buffer_size=1000
+		self.replay_buffer_size=int(1e6)
 
 		#overall hyperparameters
-		self.training_steps_to_selfplay_steps_ratio=1.6
+		self.training_steps_to_selfplay_steps_ratio=1.0
 		#don't need to be very high(e.g. 1,1.2)
 		#self.training_steps_to_selfplay_steps_ratio=float('inf')#observing training
 		#self.reanalyze_games_to_selfplay_games_ratio=0.8
 		#reanalyze all games, as it doesn't take much time.
 		self.test_games_to_selfplay_games_ratio=0.1
-		self.selfplay_games_per_run=1
-
+		self.num_selfplay_game_per_iteration=1
+		self.num_random_games_per_iteration=10000
 		#manager config
 		self.manager_queue=True
 
 		#experiment
 		self.winer_takes_all=False
+
+		self.rotate=True
+		self.flip=True
 def default_config():
 	return Config(
 		max_moves=1000000,#it can be infinity because any 2048 game is bound to end
-		discount=0.97,
+		discount=1.0,
 		search_threads=5,
 		model_max_threads=3000,
 		if_add_exploration_noise=True,
 		dirichlet_alpha=0.3,
-		num_simulations=100,
+		num_simulations=50,
 		board_size=4,
-		batch_size=256,
-		td_steps=60,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
+		batch_size=512,#1024
+		td_steps=1,#when calculating value target, bootstrapping td_steps steps next moves' rewards and value
 		#2048 games tend to be very long
 		num_actors=5,
 		#lr_init=1.,#for adadelta
-		lr_init=5e-4,
-		lr_decay_steps=20e3,
+		lr_init=8e-4,#1e-3
+		lr_decay_steps=40e3,
 		visit_softmax_temperature_fn=default_visit_softmax_temperature)

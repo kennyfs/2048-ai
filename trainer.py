@@ -161,12 +161,13 @@ class Trainer:
 			list(target_value_batch.shape)==[self.batch_size,self.num_unroll_steps+1,2*self.config.support+1] and
 			list(target_reward_batch.shape)==[self.batch_size,self.num_unroll_steps+1,2*self.config.support+1] and
 			list(target_policy_batch.shape)==[self.batch_size,self.num_unroll_steps+1,4] and
-			list(weight_batch.shape)==[self.batch_size]),f'batch shape error,{observation_batch.shape},{action_batch.shape},{target_value_batch.shape},{target_reward_batch.shape},{target_policy_batch.shape},{weight_batch.shape}'
+			(not self.config.PER or list(weight_batch.shape)==[self.batch_size])),f'batch shape error,{observation_batch.shape},{action_batch.shape},{target_value_batch.shape},{target_reward_batch.shape},{target_policy_batch.shape},{weight_batch.shape}'
 		class tmp:#I don't know better solution
 			def __init__(self, value=None):
 				self.value=value
 			def set(self, value):
 				self.value=value
+		step=tmp(0)
 		last_loss=tmp()
 		last_value_loss=tmp()
 		last_reward_loss=tmp()
@@ -225,18 +226,19 @@ class Trainer:
 					pred_value_scalar = network.support_to_scalar(value, self.config.support, True)
 				else:
 					pred_value_scalar = np.reshape(value,(-1))
-				if i==0:
-					index=np.random.choice(len(pred_value_scalar))
-					last_value_initial_delta.set(pred_value_scalar[index]-target_value_scalar[index][i])
-					last_value_initial.set(pred_value_scalar[index])
-				elif i==1:
-					index=np.random.choice(len(pred_value_scalar))
-					last_value_recurrent_delta.set(pred_value_scalar[index]-target_value_scalar[index][i])
-					last_value_recurrent.set(pred_value_scalar[index])
-					index=np.random.choice(len(pred_value_scalar))
-					reward=np.expand_dims(reward[index],0)
-					last_reward_delta.set(network.support_to_scalar(reward, self.config.support, True)[0].numpy()-target_reward_scalar[index][i])
-					last_reward.set(network.support_to_scalar(reward, self.config.support, True)[0].numpy())
+				if step.value==0:
+					if i==0:
+						index=np.random.choice(len(pred_value_scalar))
+						last_value_initial_delta.set(pred_value_scalar[index]-target_value_scalar[index][i])
+						last_value_initial.set(pred_value_scalar[index])
+					elif i==1:
+						index=np.random.choice(len(pred_value_scalar))
+						last_value_recurrent_delta.set(pred_value_scalar[index]-target_value_scalar[index][i])
+						last_value_recurrent.set(pred_value_scalar[index])
+						index=np.random.choice(len(pred_value_scalar))
+						reward=np.expand_dims(reward[index],0)
+						last_reward_delta.set(network.support_to_scalar(reward, self.config.support, True)[0].numpy()-target_reward_scalar[index][i])
+						last_reward.set(network.support_to_scalar(reward, self.config.support, True)[0].numpy())
 				priorities[:, i] = (
 					np.abs(pred_value_scalar - target_value_scalar[:, i])
 					** self.config.PER_alpha
@@ -255,11 +257,13 @@ class Trainer:
 			# (Deepmind's pseudocode do sum, and werner-duvaud/muzero-general do mean. Both are the same.) 
 			loss=tf.math.reduce_mean(loss)#now loss is a scalar
 			l2_loss=tf.add_n([tf.nn.l2_loss(v) for v in self.model.trainable_variables])
-			last_loss.set(loss.numpy())
-			last_value_loss.set(tf.math.reduce_mean(total_value_loss).numpy())
-			last_reward_loss.set(tf.math.reduce_mean(total_reward_loss).numpy())
-			last_policy_loss.set(tf.math.reduce_mean(total_policy_loss).numpy())
-			last_l2_loss.set(l2_loss.numpy())
+			if step.value==0:
+				last_loss.set(loss.numpy())
+				last_value_loss.set(tf.math.reduce_mean(total_value_loss).numpy())
+				last_reward_loss.set(tf.math.reduce_mean(total_reward_loss).numpy())
+				last_policy_loss.set(tf.math.reduce_mean(total_policy_loss).numpy())
+				last_l2_loss.set(l2_loss.numpy())
+				step.set(step.value+1)
 			loss+=l2_loss*self.l2_weight
 			return loss
 

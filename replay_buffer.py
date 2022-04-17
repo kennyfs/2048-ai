@@ -26,7 +26,8 @@ class ReplayBuffer:
 		)
 		if self.total_samples != 0:
 			print(f'Replay buffer initialized with {self.total_samples} samples ({self.num_played_games} games).\n')
-
+		self.rotate=config.rotate
+		self.flip=config.flip
 		# Fix random generator seed
 		np.random.seed(self.config.seed)
 
@@ -93,8 +94,30 @@ class ReplayBuffer:
 			)
 
 			index_batch.append([game_id, game_pos])
+			observation=game_history.get_observation(game_pos)
+			if self.rotate:
+				rotate=random.randint(0,3)
+				observation=np.rot90(observation,rotate,(1,2))
+				#UDLR to LRDU to DURL to RLUD
+				#U to L, 0 to 2
+				#D to R, 1 to 3
+				#L to D, 2 to 1
+				#R to U, 3 to 0
+				dict={0:2,1:3,2:1,3:0}
+				for _ in range(rotate):
+					actions=[dict[action] for action in actions]
+
+					policies=[[policy[3],policy[2],policy[0],policy[1]] for policy in policies]
+			if self.flip and random.randint(0,1)==1:
+				observation=np.flip(observation,1)
+				#U to D, 0 to 1
+				#D to U, 1 to 0
+				dict={0:1,1:0,2:2,3:3}
+				actions=[dict[action] for action in actions]
+
+				policies=[[policy[1],policy[0],policy[2],policy[3]]for policy in policies]
 			observation_batch.append(
-				game_history.get_observation(game_pos)
+				observation
 			)
 			action_batch.append(actions)
 			value_batch.append(values)
@@ -118,7 +141,7 @@ class ReplayBuffer:
 			index_batch,
 			(
 				np.array(observation_batch,dtype=np.float32),
-				np.array(action_batch,dtype=np.float32),
+				np.array(action_batch,dtype=np.int32),
 				np.array(value_batch,dtype=np.float32),
 				np.array(reward_batch,dtype=np.float32),
 				np.array(policy_batch,dtype=np.float32),

@@ -229,7 +229,7 @@ class MCTS:
 			assert flag, f'Legal actions should be a subset of the action space. Got {legal_actions}'
 			policy=tf.nn.softmax(policy_logits)
 			if debug:
-				print(f'reward:{reward}\nroot_predicted_value:{root_predicted_value}\npolicy:{policy}')
+				print(f'root_predicted_value:{root_predicted_value}\npolicy:{policy}')
 			root.expand(
 				legal_actions,
 				reward,
@@ -400,7 +400,7 @@ class SelfPlay:
 		# should initialize manager, predictor at main.py, all selfplayer(self_play_worker*num_actors and test_worker*1)
 		self.predictor=predictor
 
-	def self_play(self, replay_buffer, shared_storage, test_mode=False, random:bool=False, render:bool=False):
+	def self_play(self, replay_buffer, shared_storage, test_mode=False, render:bool=False):
 		if test_mode:
 			# Take the best action (no exploration) in test mode
 			# This is for log(to tensorboard), in order to see the progress
@@ -424,19 +424,16 @@ class SelfPlay:
 			)
 			return
 		total=0
-		while total<self.config.selfplay_games_per_run:
+		while total<self.config.num_selfplay_game_per_iteration:
 			#self.predictor.manager.set_weights(shared_storage.get_info("weights"))
 
 			print('flag self_play1')
-			if random:
-				game_history=self.play_random_game(render)
-			else:
-				game_history=self.play_game(
-					self.config.visit_softmax_temperature_fn(
-						training_steps=shared_storage.get_info("training_step")
-					),
-					render,### if you want to render, change main.py
-				)
+			game_history=self.play_game(
+				self.config.visit_softmax_temperature_fn(
+					training_steps=shared_storage.get_info("training_step")
+				),
+				render,### if you want to render, change main.py
+			)
 			print('flag self_play2')
 			replay_buffer.save_game(game_history)#error seems to be here
 			print('flag self_play3')
@@ -537,29 +534,31 @@ class SelfPlay:
 			action = np.random.choice(actions, p=visit_count_distribution)
 
 		return action
-	def play_random_game(self, render):
+	def play_random_games(self, replay_buffer, shared_storage, render:bool=False):
 		"""
 		Play a game with a random policy.
 		"""
-		game_history = GameHistory()
-		game = self.Game(self.config)
-		game.reset()
-		done = False
-		for _ in range(2):
-			action=game.add()
-			game_history.addtile(action)
-		while not done and len(game_history.action_history) <= self.config.max_moves:
-			action = np.random.choice(game.legal_actions())
-			observation=game.get_features()
-			reward = game.step(action)
-			addaction=game.add()
-			game_history.add([action,addaction],observation,reward)
-			game_history.store_search_statistics(None, self.config.action_space_type0)
-			done = game.finish()
-			if render:
-				game.render()
-			print(f'game length:{len(game_history.root_values)}')
-		return game_history
+		for game_id in range(self.config.num_random_games_per_iteration):
+			game_history = GameHistory()
+			game = self.Game(self.config)
+			game.reset()
+			done = False
+			for _ in range(2):
+				action=game.add()
+				game_history.addtile(action)
+			while not done and len(game_history.action_history) <= self.config.max_moves:
+				action = np.random.choice(game.legal_actions())
+				observation=game.get_features()
+				reward = game.step(action)
+				addaction=game.add()
+				game_history.add([action,addaction],observation,reward)
+				game_history.store_search_statistics(None, self.config.action_space_type0)
+				done = game.finish()
+				if render:
+					game.render()
+			if game_id%50==0:
+				print(f'ratio:{game_id/self.config.num_random_games_per_iteration}')
+			replay_buffer.save_game(game_history)
 #show a game(for debugging)
 if __name__=='__main__':
 	con=my_config.default_config()

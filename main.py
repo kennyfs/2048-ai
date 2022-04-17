@@ -137,11 +137,24 @@ class MuZero:
 			)
 			counter, training_counter=self.log_once(counter, training_counter, False)
 			training_step=self.shared_storage_worker.get_info('training_step')
+			self.reanalyze_worker.reanalyze(
+				self.replay_buffer_worker, self.shared_storage_worker
+			)
 			if training_step==last_step:
 				break
 			last_step=training_step
 		return counter, training_counter
-	def self_play_and_train(self, log_in_tensorboard=True, random=False, render:bool=False):
+	def initialize_all_workers(self):
+		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
+
+		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
+
+		self.replay_buffer_worker = replay_buffer.ReplayBuffer(self.checkpoint, self.replay_buffer, self.config)
+
+		if self.config.reanalyze:
+			self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
+		self.self_play_worker = self_play.SelfPlay(self.predictor, self.Game, self.config)
+	def self_play_and_train(self, log_in_tensorboard=True, render:bool=True):
 		"""
 		Spawn ray workers and launch the training.
 
@@ -171,24 +184,25 @@ class MuZero:
 		# Initialize workers
 		self.checkpoint['num_played_games']=0
 		self.checkpoint['num_played_steps']=0
-		#self.checkpoint['training_step']=0
-		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
-
-		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
-
-		self.replay_buffer_worker = replay_buffer.ReplayBuffer(self.checkpoint, self.replay_buffer, self.config)
-
-		if self.config.reanalyze:
-			self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
-		self.self_play_worker = self_play.SelfPlay(self.predictor, self.Game, self.config)
-
+		self.checkpoint['training_step']=0
+		self.initialize_all_workers()
+		last_game_id=0
+		while 1:
+			if not os.path.isfile(os.path.join(self.config.load_game_dir,f'{last_game_id+1}.record')):
+				break
+			last_game_id+=1
+		self.replay_buffer_worker.load_games(1,last_game_id)
+		info=self.replay_buffer_worker.get_info()
+		self.shared_storage_worker.set_info(info)
 		# Launch workers
 		counter=0
 		training_counter=self.shared_storage_worker.get_info('training_step')//self.config.training_steps_per_batch
+		#counter, training_counter=self.training_loop(counter, training_counter)
+		print('done training')
 		try:
 			while 1:
 				self.self_play_worker.self_play(
-					self.replay_buffer_worker, self.shared_storage_worker, random=random, render=render
+					self.replay_buffer_worker, self.shared_storage_worker, render=render
 				)
 				#if want to load existing game:
 				#self.replay_buffer_worker.load_games(1,5)
@@ -197,10 +211,6 @@ class MuZero:
 				print('done playing')
 				counter, training_counter=self.training_loop(counter, training_counter)
 				print('done training')
-				self.reanalyze_worker.reanalyze(
-					self.replay_buffer_worker, self.shared_storage_worker
-				)
-				print('done reanalyzing')
 				counter, training_counter=self.log_once(counter, training_counter)
 				print(f'counter:{counter},training_counter:{training_counter}')
 		except KeyboardInterrupt:
@@ -215,28 +225,23 @@ class MuZero:
 		self.checkpoint['num_played_steps']=0
 		if reset_model:
 			self.checkpoint['training_step']=0
-		self.training_worker = trainer.Trainer(self.checkpoint, self.model, self.config)
-
-		self.shared_storage_worker = shared_storage.SharedStorage(self.checkpoint, self.config)
-
-		self.replay_buffer_worker = replay_buffer.ReplayBuffer(self.checkpoint, self.replay_buffer, self.config)
-		
-		self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
+		self.initialize_all_workers()
 		
 		last_game_id=0
 		while 1:
 			if not os.path.isfile(os.path.join(self.config.load_game_dir,f'{last_game_id+1}.record')):
 				break
 			last_game_id+=1
+		#self.replay_buffer_worker.load_games(last_game_id-self.config.replay_buffer_size+1,last_game_id)
 		self.replay_buffer_worker.load_games(1,last_game_id)
 		info=self.replay_buffer_worker.get_info()
 		for k,v in info.items():
 			self.checkpoint[k]=v
 		self.shared_storage_worker.set_info(info)
 		print('done playing')
-		self.reanalyze_worker.reanalyze(
-			self.replay_buffer_worker, self.shared_storage_worker
-		)
+		#self.reanalyze_worker.reanalyze(
+		#	self.replay_buffer_worker, self.shared_storage_worker
+		#)
 		if reset_model:
 			self.reset_model()
 			#If you want to train from scratch
@@ -253,6 +258,10 @@ class MuZero:
 				self.replay_buffer_worker, self.shared_storage_worker, 100, True
 			)
 			counter, training_counter=self.log_once(counter, training_counter, False)
+	def play_random_games(self, render=False):
+		self.initialize_all_workers()
+		self.self_play_worker.play_random_games(self.replay_buffer_worker, self.shared_storage_worker, render=render)
+
 	def log_once(self, counter, training_counter, test_game=True):
 		"""
 		Keep track of the training performance.
@@ -533,7 +542,7 @@ if __name__ == "__main__":
 				choice = input("Invalid input, enter a number listed above: ")
 			choice = int(choice)
 			if choice == 0:
-				muzero.self_play_and_train(random=False, render=True)
+				muzero.self_play_and_train(render=True)
 			elif choice == 1:
 				res=input('train from scratch? (y/n)').strip().lower()
 				while res not in ('y','n'):
@@ -542,7 +551,7 @@ if __name__ == "__main__":
 			elif choice == 2:
 				muzero.load_model_menu()
 			elif choice == 3:
-				muzero.self_play_and_train(random=True, render=False)
+				muzero.play_random_games(render=False)
 			elif choice == 4:
 				env = muzero.Game()
 				env.reset()
