@@ -114,7 +114,15 @@ def batch_action_to_onehot(action_batch, board_size, matrix=False):
 		)
 		ret=tf.reshape(ret,(batch_size,4))
 	return ret
-NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state','value','policy'])
+def chance_softmax(chance):
+	assert len(chance.shape)==4
+	assert chance.shape[1:]==[1,4,4]
+	batch=chance.shape[0]
+	chance=tf.reshape(chance,(batch,16))
+	chance=tf.nn.softmax(chance,axis=-1)
+	chance=tf.reshape(chance,(batch,1,4,4))
+	return chance
+NetworkOutput=collections.namedtuple('NetworkOutput', ['reward', 'hidden_state','value','policy','chance'])
 
 												####shapes:###
 #observation:		in shape of (batch_size,channels,board_size_x,board_size_y)#board_size_x=board_size_y in most cases
@@ -166,6 +174,13 @@ class AbstractNetwork(ABC):
 		#reward is in logits
 		pass
 
+	@abstractmethod
+	def chance(self, hidden_state, action):
+		'''
+		output: chance(batch, 1, 4, 4)
+		actually, it outputs where to put the next tile(blanks)
+		'''
+		pass
 	@abstractmethod
 	def dynamics_for_manager(self, inputs):
 		pass
@@ -371,9 +386,30 @@ class FullyConnectedNetwork(AbstractNetwork):
 ########## CNN or RESNET #########
 
 def conv3x3(out_channels, stride=1):
-	return tf.keras.layers.Conv2D(out_channels, kernel_size=3, strides=stride, padding='same', use_bias=False, data_format='channels_first')
+	return tf.keras.layers.Conv2D(out_channels, kernel_size=3, strides=stride, padding='same', use_bias=True, data_format='channels_first')
 def conv1x1(out_channels, stride=1):
-	return tf.keras.layers.Conv2D(out_channels, kernel_size=1, strides=stride, padding='same', use_bias=False, data_format='channels_first')
+	return tf.keras.layers.Conv2D(out_channels, kernel_size=1, strides=stride, padding='same', use_bias=True, data_format='channels_first')
+class Squeeze_excitation_block(tf.keras.Model):
+	def __init__(self, filter_sq, num_channels):
+		super().__init__()
+		self.filter_sq = filter_sq
+		self.pool = tf.keras.layers.GlobalAveragePooling2D(data_format = 'channels_first')
+		self.dense_1 = tf.keras.layers.Dense(filter_sq)
+		self.dense_2 = tf.keras.layers.Dense(num_channels)
+		self.relu = tf.keras.layers.Activation('relu')
+		self.sigmoid = tf.keras.layers.Activation('sigmoid')
+		self.reshape = tf.keras.layers.Reshape((num_channels,1,1))
+	def call(self,x):
+		squeezed = self.pool(x)
+
+		excitation = self.dense_1(squeezed)
+		excitation = self.relu(excitation)
+		excitation = self.dense_2(excitation)
+		excitation = self.sigmoid(excitation)
+		excitation = self.reshape(excitation)
+
+		scale = x * excitation
+		return scale
 class ResidualBlock(tf.keras.Model):
 	def __init__(self, num_channels):
 		super().__init__()
@@ -382,35 +418,54 @@ class ResidualBlock(tf.keras.Model):
 		self.bn1 = tf.keras.layers.BatchNormalization()
 		self.bn2 = tf.keras.layers.BatchNormalization()
 		self.relu = tf.keras.layers.ReLU()
+		self.se = Squeeze_excitation_block(num_channels, num_channels)
 	def call(self, x):
 		residual = x
-		out = self.relu(self.bn1(self.conv1(x)))
-		out = self.bn2(self.conv2(out))
-		out += residual#no need for deepcopy?
+		out = self.conv1(x)
+		out = self.bn1(out)
+		out = self.relu(out)
+		out = self.conv2(out)
+		out = self.bn2(out)
+		out = self.se(out)
+		out += residual
 		out = self.relu(out)
 		return out
 
 #no need to downsample because 2048 is only 4x4
-
+'''
+representation_model:
+	input:observation
+	output:hidden_state
+dynamic_model:
+	input:hidden_state,action,random_action_distribution
+	output:new_hidden_state,reward,random_action_distribution
+representation_model:
+	input:hidden_state
+	output:policy,value
+'''
 class representation(tf.keras.Model):
 	def __init__(self, input_shape, num_channels, num_blocks):
 		super().__init__()
 		self.conv=conv3x3(num_channels)
 		self.bn=tf.keras.layers.BatchNormalization()
 		self.relu=tf.keras.layers.ReLU()
-		#self.resblock=[ResidualBlock(num_channels) for i in range(num_blocks)]
-		self.resblock=[[conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization(), conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization()]for i in range(num_blocks)]
+		self.resblock=[ResidualBlock(num_channels) for i in range(num_blocks)]
+		#self.resblock=[[conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization(), conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization()]for i in range(num_blocks)]
 		self.build([1]+input_shape)
 
 	def call(self,x):
 		out=self.conv(x)
 		out=self.bn(out)
 		out=self.relu(out)
+		for block in self.resblock:
+			out=block(out)
+		'''
 		for conv1,bn1,conv2,bn2 in self.resblock:
 			tmpout=self.relu(bn1(conv1(out)))
 			tmpout=bn2(conv2(tmpout))
 			out+=tmpout
 			out=self.relu(out)
+		'''
 		return out
 
 class dynamics(tf.keras.Model):
@@ -420,38 +475,51 @@ class dynamics(tf.keras.Model):
 		num_blocks,
 		reduced_channels_reward,
 		reward_layers,
+		chance_layers,
 		support):
 		super().__init__()
 		self.conv=conv3x3(num_channels)
 		self.bn=tf.keras.layers.BatchNormalization()
 		self.relu=tf.keras.layers.ReLU()
-		#self.resblock=[ResidualBlock(num_channels) for i in range(num_blocks)]
-		self.resblock=[[conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization(), conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization()]for i in range(num_blocks)]
+		self.resblock_1=[ResidualBlock(num_channels) for i in range(num_blocks)]
+		#self.resblock=[[conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization(), conv3x3(num_channels, num_channels),tf.keras.layers.BatchNormalization()]for i in range(num_blocks)]
 		
 		self.conv_reward=conv1x1(reduced_channels_reward)
 		self.bn_reward=tf.keras.layers.BatchNormalization()
 		self.flatten=tf.keras.layers.Flatten()
+
 		self.reward_output=[tf.keras.layers.Dense(size, activation='relu') for size in reward_layers]+[tf.keras.layers.Dense(support*2+1)]
+
 		self.build([1]+input_shape)
 
-	def call(self,x):
-		out=self.conv(x)
+	def call(self,hidden_state_and_action,random_action):
+		out=self.conv(hidden_state_and_action)
 		out=self.bn(out)
 		out=self.relu(out)
+		for block in self.resblock:
+			out=block(out)
+		'''
 		for conv1,bn1,conv2,bn2 in self.resblock:
 			tmpout=self.relu(bn1(conv1(out)))
 			tmpout=bn2(conv2(tmpout))
 			out+=tmpout
 			out=self.relu(out)
+		'''
 		hidden_state=out
-		out=self.conv_reward(out)
-		out=self.bn_reward(out)
-		out=self.flatten(out)
-		out=self.relu(out)
+		reward=hidden_state
+		reward=self.conv_reward(reward)
+		reward=self.bn_reward(reward)
+		reward=self.flatten(reward)
+		reward=self.relu(reward)
 		for layer in self.reward_output:
-			out=layer(out)
-		reward=out
-		return hidden_state, reward
+			reward=layer(reward)
+
+		chance=hidden_state
+		for layer in self.conv_chance:
+			chance=layer(chance)
+			chance=self.relu(chance)
+		chance=self.chance_output(chance)
+		return hidden_state, reward, chance
 
 class prediction(tf.keras.Model):
 	def __init__(self,
@@ -493,11 +561,12 @@ class ResNetNetwork(AbstractNetwork):
 			config.num_channels,
 			config.num_blocks-1)
 		self.dynamics_model=dynamics(
-			[config.num_channels+4, config.board_size, config.board_size],
+			[config.num_channels+4+2, config.board_size, config.board_size],
 			config.num_channels,
 			config.num_blocks-1,
 			config.reduced_channels_reward,
 			config.reward_layers,
+			config.chance_layers,
 			config.support)
 		self.prediction_model=prediction(
 			[config.num_channels, config.board_size, config.board_size],
@@ -510,18 +579,18 @@ class ResNetNetwork(AbstractNetwork):
 		self.trainable_variables=self.representation_model.trainable_variables+self.dynamics_model.trainable_variables+self.prediction_model.trainable_variables
 	def representation(self, observation):
 		return scale_hidden_state(self.representation_model(observation))
-	def dynamics(self, hidden_state, action):
-		myinput=tf.concat([hidden_state, action], axis=1)
-		hidden_state, reward=self.dynamics_model(myinput)
+	def dynamics(self, hidden_state, action, random_action):
+		myinput=tf.concat([hidden_state, action, random_action], axis=1)
+		hidden_state, reward, chance=self.dynamics_model(myinput)
 		hidden_state=scale_hidden_state(hidden_state)
-		return hidden_state, reward
+		return hidden_state, reward, chance
 	def dynamics_for_manager(self, inputs):
 		'''
 		batched and concatenated inputs
 		'''
-		hidden_state,reward=self.dynamics_model(inputs)
+		hidden_state,reward,chance=self.dynamics_model(inputs)
 		hidden_state=scale_hidden_state(hidden_state)
-		return hidden_state,reward
+		return hidden_state,reward,chance
 	def prediction(self, hidden_state):
 		policy, value=self.prediction_model(hidden_state)
 		return policy, value
@@ -608,7 +677,7 @@ class Manager:
 					return ret[0]
 				elif network=='dynamics':
 					ret=self.dynamics(features)
-					return ret[0][0],support_to_scalar(ret[1],self.support)[0]
+					return ret[0][0],support_to_scalar(ret[1],self.support)[0],chance_softmax(ret[2])
 				elif network=='prediction':
 					ret=self.prediction(features)
 					return ret[0][0],support_to_scalar(ret[1],self.support)[0]
@@ -665,14 +734,15 @@ class Manager:
 					for i in range(len(item_list)):
 						item_list[i].future.set_result(hidden_state[i])
 				elif name=='dynamics':
-					hidden_state,reward=results
+					hidden_state,reward,chance=results
 					assert hidden_state.shape[0]==len(item_list) and reward.shape[0]==len(item_list), 'sizes of hidden_state('+hidden_state.shape+'), reward('+reward.shape+'), and item_list('+len(item_list)+') don\'t match, this should never happen.'
 					if self.support:
 						reward=support_to_scalar(reward,self.support,True)
 					else:
 						reward=tf.reshape(reward,(-1))
+					chance=chance_softmax(chance)
 					for i in range(len(item_list)):
-						item_list[i].future.set_result((hidden_state[i],reward[i]))
+						item_list[i].future.set_result((hidden_state[i],reward[i],chance[i]))
 						if random.random()<0.01:
 							print(f'r:{reward[i]}')
 				elif name=='prediction':
@@ -713,15 +783,16 @@ class Predictor:
 		hidden_state=await self.get_outputs(observation,'representation')#already scaled
 		policy,value=await self.get_outputs(hidden_state,'prediction')
 		print(f'value:{value}')
-		return NetworkOutput(reward=0,hidden_state=hidden_state,value=value,policy=policy)
+		return NetworkOutput(reward=0,hidden_state=hidden_state,value=value,policy=policy,chance=None)
 
-	async def recurrent_inference(self,hidden_state:np.array,action:np.array)->NetworkOutput:
+	async def recurrent_inference(self,hidden_state:np.array,action:np.array,chance:np.array)->NetworkOutput:
 		'''
 		temporarily only for fully connected network.
 		input shape:
 			all be without batchsize
 			hidden_state:(hidden_state_size(32))
 			action:(1) or ()
+			chance:(2,4,4)
 
 			for resnet
 			hidden_state:(num_channels, hidden_state_size_x, hidden_state_size_y)
@@ -729,12 +800,14 @@ class Predictor:
 		if type(action) in (list,np.array):
 			action=action[0]
 		action=action_to_onehot(action, self.config.board_size, matrix=(self.mode=='resnet'))
-		inputs=np.concatenate((hidden_state,action),axis=0)
-		new_hidden_state,reward=await self.get_outputs(inputs,'dynamics')#hidden state is already scaled
+		if self.mode=='fullyconnected':
+			chance=np.reshape(chance,(-1))
+		inputs=np.concatenate((hidden_state,action,chance),axis=0)#axis 0 is channel for resnet
+		new_hidden_state,reward,chance=await self.get_outputs(inputs,'dynamics')#hidden state is already scaled
 		
 		policy,value=await self.get_outputs(new_hidden_state,'prediction')
 		
-		return NetworkOutput(reward=reward,hidden_state=new_hidden_state,value=value,policy=policy)
+		return NetworkOutput(reward=reward,hidden_state=new_hidden_state,value=value,policy=policy,chance=chance)
 	'''def run_coroutine_list(self):
 		return self.manager.run_coroutine_list()
 	def add_coroutine_list(self, toadd):

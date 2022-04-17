@@ -85,7 +85,8 @@ class Config:
 		self.value_layers=[128]# dense layer sizes following conv1x1 and flatten
 		self.policy_layers=[]
 		self.reward_layers=[128]
-		
+		self.chance_layers=[32]
+
 		### Training
 		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
 		if not os.path.isdir(self.results_path):
@@ -141,7 +142,7 @@ class Config:
 		self.training_steps_to_selfplay_steps_ratio=1.0
 		#don't need to be very high(e.g. 1,1.2)
 		#self.training_steps_to_selfplay_steps_ratio=float('inf')#observing training
-		#self.reanalyze_games_to_selfplay_games_ratio=0.8
+		self.reanalyze_games_to_selfplay_games_ratio=0.1#ratio to control the number of reanalyze games each time
 		#reanalyze all games, as it doesn't take much time.
 		self.test_games_to_selfplay_games_ratio=0.1
 		self.num_selfplay_game_per_iteration=1

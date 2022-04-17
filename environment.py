@@ -159,6 +159,11 @@ class Environment:
 		result=np.concatenate([np.expand_dims(np.where(grid==i,1.0,0.0),0) for i in range(1,self.board_size**2+1)],axis=0)
 		return result
 		'''
+	def random_chance_distribution(self)->np.array:
+		result=np.array(self.grid)
+		result=np.where((result==0,1.0,0.0))
+		result/=np.sum(result)
+		return result
 	def human_to_action(self):
 		action=input('Enter a action(UDLR or 1234):')
 		d={'U':0,'D':1,'L':2,'R':3,'1':0,'2':1,'3':2,'4':3}

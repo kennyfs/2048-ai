@@ -6,19 +6,14 @@
 ## todo  
 - [ ] 調整訓練參數讓輸出更理想  
 - [ ] 運用多線程增進selfplay效率(似乎有點難)  
-- [X] 隨機產生遊戲
 - [X] 修[bug](#Bugs)，目前沒什麼bug
-- [ ] log更多資訊（如：隨機取樣輸出、lr）
+- [ ] 網路跟其他配套還沒寫好
 ## 理解
 1. value target: bootstrap---value is expectant reward, so expectant score=value+reward in past
 ## 提醒自己
 network.Network及他的subclass輸出的hidden state都是scale過的，在Predictor、Manager、AbstractNetwork中都可以忽略scale hidden state
 ## 想法
-shared storage中儲存網路不一定要和其他資訊一起儲存  
-非必要不要用ray，因為ray似乎無法把有asyncio的東西當作函數的參數（無法pickle），畢竟我就只有一個GPU，讓inference排隊，一起預測才比較重要  
-  
-replay buffer、shared storage必須同時用ray或不用ray，否則如果replay buffer用ray、shared storage是普通型態的參數，replay buffer會copy一份shared storage，無法正確修改。  
-解決辦法：replay buffer不要管shared storage中的資訊，要用的時候(結束完selfplay更新)
+參考陽明交大論文，以及KataGo，因為chance network要輸出空白的分佈，所以我想到可以像katago輸出領土分佈一樣，訓練一個網路，輸入hidden_state輸出observation，新增一個loss讓網路更趨近於環境。但後來想到hidden_state其實不一定要包含所有盤面上的資訊，而是側重某些方面，加入這個loss可能反而會讓模型沒辦法好好預測value reward policy，所以如果要加loss應該要謹慎。  
 ## Bugs
 ### bug1
 偶爾一局遊戲結束時會停住，不知道發生什麼問題，然後很久很久之後出現這樣的錯誤訊息：  
