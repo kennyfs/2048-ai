@@ -25,8 +25,8 @@ class MinMaxStats():
 		self.maximum = max(self.maximum, value)
 		self.minimum = min(self.minimum, value)
 
-	def normalize(self, value:float)->float:
-		if self.maximum>self.minimum:
+	def normalize(self, value:float) -> float:
+		if self.maximum > self.minimum:
 			# We normalize only when we have set the maximum and minimum values.
 			return (value-self.minimum)/(self.maximum-self.minimum)
 		return value
@@ -212,18 +212,18 @@ class MCTS:
 			root_predicted_value = None
 		else:
 			#defaulted not to use previously searched nodes and create a new tree
-			root = Node(0)
+			root = Node(0, False)
 			self.predictor.manager.add_coroutine_list(self.predictor.initial_inference(observation))
 			output = self.predictor.manager.run_coroutine_list(True)[0]
 			root_predicted_value = output.value
-			reward = output.reward
+			reward = 0
 			policy_logits = output.policy
 			hidden_state = output.hidden_state
-			assert len(legal_actions)>0, 'Legal actions should not be an empty array.'
+			assert len(legal_actions) > 0, 'Legal actions should not be an empty array.'
 			#only for check if actions are legal(unnecessary)
 			flag = 1
 			for action in legal_actions:
-				if action<0 or action >= 4:
+				if action < 0 or action >= 4:
 					flag = 0
 					break
 			assert flag, f'Legal actions should be a subset of the action space. Got {legal_actions}'
@@ -253,78 +253,68 @@ class MCTS:
 		#	'root_predicted_value': root_predicted_value,
 		#}#sometimes useful for debugging or playing?
 		return root
-	async def tree_search(self, node, min_max_stats):#->int|None:
+	async def tree_search(self, node, min_max_stats):# -> int|None:
+		#### maybe it's ok now, should check it again later
 		async with self.sem:
-			now_expanding = self.now_expanding
 
-			search_path = [node]
-			current_tree_depth = 0
-			while node.expanded():
-				current_tree_depth += 1
-				action, node = self.select_child(node, min_max_stats)
+			#root is a move node
+			action, random_node = node.select_child(min_max_stats)
+
+			search_path = [node, random_node]
+			#node is a random node
+			last_node_random = True
+			while random_node.expanded():
+				random_action, node = random_node.select_child(min_max_stats)
 				search_path.append(node)
-				while node in now_expanding:
+				while node in self.now_expanding:
 					await asyncio.sleep(1e-4)
-			self.now_expanding.add(node)
-			# Inside the search tree we use the dynamics function to obtain the next hidden
-			# state given an action and the previous hidden state
-			parent = search_path[-2]
+				if not node.expanded():
+					last_node_random = False
+					self.now_expanding.add(node)
+					break
+				action, random_node = node.select_child(min_max_stats)
+				search_path.append(random_node)
+				while random_node in self.now_expanding:
+					await asyncio.sleep(1e-4)
+			#o as move node, x as random node
+			if last_node_random:
+				#last 2 nodes: o-x
+				#get hidden state from o, get action from choosing x
+				self.now_expanding.add(random_node)
+				action = network.action_to_onehot(action, self.config.board_size, matrix = (self.config.network_type == 'resnet'))
+				chance = await self.predictor.get_outputs([node.hidden_state, action], 3)
+				#chance is a np.array with shape 4+2*board_size**2
+				random_node.expand(
+					self.config.action_space_type1,
+					random_node.reward,
+					chance,
+					None,
+				)
+				random_action, node = random_node.select_child(min_max_stats)
+				search_path.append(node)
+
+			#last 3 nodes: o-x-o
+			#get hidden_state from the first o, get action from choosing x, get random action from choosing the second o
 			output = await self.predictor.recurrent_inference(
-				parent.hidden_state,
-				action
+				search_path[-3].hidden_state,
+				action,
+				random_action,
 			)
+			#generate policy, value, reward for the second o
+			#backpropagate value, set reward for the second o, set policy for the children(new x)
 			node.expand(
 				self.config.action_space_type0,
 				output.reward,
 				tf.nn.softmax(output.policy),
 				output.hidden_state,
 			)
+			#reward is initially stored in x, and o contains its father's reward
+			
 			self.backpropagate(search_path, output.value, min_max_stats)
-			self.now_expanding.remove(node)
-		
-
-	def select_child(self, node, min_max_stats):
-		"""
-		Select the child with the highest UCB score for mcts, not for final play.
-		So type 1 contains all possible positions.
-		"""
-		action = None
-		ucb = [self.ucb_score(node, child, min_max_stats) for child in node.children.values()]
-		max_ucb = max(ucb)
-		action = np.random.choice(
-			[
-				action
-				for i, action in enumerate(node.children.keys())
-				if ucb[i] == max_ucb
-			]
-		)
-		return action, node.children[action]
-
-	def ucb_score(self, parent, child, min_max_stats):#only for type0
-		"""
-		The score for a node is based on its value, plus an exploration bonus based on the prior.
-		"""
-		pb_c = (
-			math.log(
-				(parent.visit_count + self.config.pb_c_base + 1) / self.config.pb_c_base
-			)
-			+ self.config.pb_c_init
-		)
-		pb_c *   math.sqrt(parent.visit_count) / (child.visit_count + 1)
-
-		prior_score = pb_c * child.prior
-
-		if child.visit_count > 0:
-			# Mean value Q
-			value_score = min_max_stats.normalize(
-				child.reward
-				+ self.config.discount
-				* child.value()
-			)
-		else:
-			value_score = 0
-
-		return prior_score + value_score
+			if last_node_random:
+				self.now_expanding.remove(random_node)
+			else:
+				self.now_expanding.remove(node)
 
 	def backpropagate(self, search_path, value, min_max_stats):
 		"""
@@ -340,14 +330,14 @@ class MCTS:
 
 		 
 class Node:
-	def __init__(self, prior):
+	def __init__(self, prior, random=False):
 		self.visit_count = 0
 		self.prior = prior
 		self.value_sum = 0
 		self.children = {}
 		self.hidden_state = None
 		self.reward = 0
-
+		self.random=random
 	def expanded(self):
 		return len(self.children) > 0
 
@@ -356,23 +346,21 @@ class Node:
 			return 0
 		return self.value_sum / self.visit_count
 
-	def expand(self, actions, reward, policy_logits, hidden_state):
+	def expand(self, actions, reward, policy, hidden_state, threshold_for_policy=0.01):
 		"""
 		We expand a node using the value, reward and policy prediction obtained from the
 		neural network.
+		if self is a random node, policy_logits is in format like config.type1_p, from chance network output
+		hidden state is None
 		"""
 		assert type(actions) in (int, list), f'type(actions) = type({actions}) = {type(actions)}, not int or list'
 		if type(actions) == int:
 			actions = list(range(actions))
 		self.reward = reward
 		self.hidden_state = hidden_state
-		policy_values = tf.nn.softmax(
-			[policy_logits[a] for a in actions]
-		).numpy()
-		policy = {a: policy_values[i] for i, a in enumerate(actions)}
-		for action, p in policy.items():
-			self.children[action] = Node(p)
-
+		for action in actions:
+			if policy[action] >= threshold_for_policy:
+				self.children[action] = Node(policy[action], random = not self.random)
 	def add_exploration_noise(self, dirichlet_alpha, exploration_fraction):
 		"""
 		At the start of each search, we add dirichlet noise to the prior of the root to
@@ -384,6 +372,56 @@ class Node:
 		frac = exploration_fraction
 		for a, n in zip(actions, noise):
 			self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
+	
+	def select_child(self, min_max_stats):
+		"""
+		Select the child with the highest UCB score for mcts, not for final play.
+		So type 1 contains all possible positions.
+		"""
+		action = None
+		if not self.random:
+			ucb = [self.ucb_score(child, min_max_stats) for child in self.children.values()]
+			max_ucb = max(ucb)
+			action = np.random.choice(
+				[
+					action
+					for i, action in enumerate(self.children.keys())
+					if ucb[i] == max_ucb
+				]
+			)
+		else:
+			action = np.random.choice(list(self.children.keys()),p=[
+				self.children[action].prior
+				for action in self.children.keys()
+			])
+		return action, self.children[action]
+
+	def ucb_score(self, child, min_max_stats):#only for type0
+		"""
+		The score for a node is based on its value, plus an exploration bonus based on the prior.
+		"""
+		assert self.random == False, f'ucb_score should not be called for random nodes'
+		pb_c = (
+			math.log(
+				(self.visit_count + self.config.pb_c_base + 1) / self.config.pb_c_base
+			)
+			+ self.config.pb_c_init
+		)
+		pb_c *= math.sqrt(self.visit_count) / (child.visit_count + 1)
+
+		prior_score = pb_c * child.prior
+
+		if child.visit_count > 0:
+			# Mean value Q
+			value_score = min_max_stats.normalize(
+				child.reward
+				+ self.config.discount
+				* child.value()
+			)
+		else:
+			value_score = 0
+
+		return prior_score + value_score
 class SelfPlay:
 	"""
 	Class which run in a dedicated thread to play games and save them to the replay-buffer.
@@ -406,7 +444,7 @@ class SelfPlay:
 			# This is for log(to tensorboard), in order to see the progress
 			if (shared_storage.get_info('num_test_games')/
 				max(1, shared_storage.get_info('num_played_games'))
-				>self.config.test_games_to_selfplay_games_ratio):
+				 > self.config.test_games_to_selfplay_games_ratio):
 				return
 			game_history = self.play_game(
 				0,
@@ -424,7 +462,7 @@ class SelfPlay:
 			)
 			return
 		total = 0
-		while total<self.config.num_selfplay_game_per_iteration:
+		while total < self.config.num_selfplay_game_per_iteration:
 			#self.predictor.manager.set_weights(shared_storage.get_info("weights"))
 
 			print('flag self_play1')

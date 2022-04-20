@@ -59,7 +59,7 @@ class Trainer:
 		start_step = self.training_step
 		while (self.training_step / max(
 				1, shared_storage.get_info("num_played_steps"))
-				< self.config.training_steps_to_selfplay_steps_ratio
+				 < self.config.training_steps_to_selfplay_steps_ratio
 				and
 				self.training_step < self.config.training_steps
 				or
@@ -127,7 +127,7 @@ class Trainer:
 		#for debug, check the shape of the batch, maybe is useful
 		#for b in batch:
 		#	print(b.shape)
-		if random.random()<0.1:
+		if random.random() < 0.1:
 			#It's important to check data sometimes, because the data is not always good.
 			print('training')
 			print(f'value:{target_value_batch[0, :]}')

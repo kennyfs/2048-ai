@@ -19,7 +19,7 @@ def scale_hidden_state(to_scale_hidden_state:np.array):
 	min_encoded_state = tf.math.reduce_min(to_scale_hidden_state, axis = 1, keepdims = True)
 	max_encoded_state = tf.math.reduce_max(to_scale_hidden_state, axis = 1, keepdims = True)
 	scale_encoded_state = max_encoded_state - min_encoded_state
-	scale_encoded_state = tf.where(scale_encoded_state<1e-5, scale_encoded_state+1e-5, scale_encoded_state)#avoid divided by 0 or too small value
+	scale_encoded_state = tf.where(scale_encoded_state < 1e-5, scale_encoded_state+1e-5, scale_encoded_state)#avoid divided by 0 or too small value
 	encoded_state_normalized = (to_scale_hidden_state - min_encoded_state) / scale_encoded_state
 	if hidden_state_as_matrix:
 		encoded_state_normalized = tf.reshape(encoded_state_normalized, shape)#and reshape to original shape
@@ -91,9 +91,10 @@ def action_to_onehot(action, board_size, matrix = False):
 	if matrix:
 		#4 planes for UDLR, next 2 planes for putting 2 or 4
 		ret = np.zeros((4, board_size, board_size))
-		if 0 <= action and action<4:
+		if 0 <= action and action < 4:
 			ret[action, :, :] = 1/(board_size**2)
 		else:
+			#### cannot handle add action, will do it later
 			raise ValueError('action should be in [0, 4)')
 	else:
 		ret = np.zeros((4), dtype = np.float32)
@@ -114,14 +115,21 @@ def batch_action_to_onehot(action_batch, board_size, matrix = False):
 		)
 		ret = tf.reshape(ret, (batch_size, 4))
 	return ret
-def chance_softmax(chance):
+def softmax_chance(chance):
 	#batched
 	assert len(chance.shape) == 4
-	assert chance.shape[1:] == [1, 4, 4]
+	board_size = chance.shape[2]
 	batch = chance.shape[0]
-	chance = tf.reshape(chance, (batch, 16))
-	chance = tf.nn.softmax(chance, axis = -1)
-	chance = tf.reshape(chance, (batch, 1, 4, 4))
+	if chance.shape[1:] == [1, board_size, board_size]:
+		chance = tf.reshape(chance, (batch, board_size**2))
+		chance = tf.nn.softmax(chance, axis = -1)
+		chance = np.concatenate([np.zeros([batch,4]),chance*0.9, chance*0.1], axis = 0)
+	else:
+		chance = tf.reshape(chance, (batch, 2*board_size**2))
+		chance = tf.nn.softmax(chance, axis = -1)
+		chance = np.concatenate([np.zeros([batch,4]), chance], axis = 0)
+	#output is (batch, 4+2*board_size**2)
+	assert chance.shape == (batch, 4+2*board_size**2)
 	return chance
 NetworkOutput = collections.namedtuple('NetworkOutput', ['reward', 'hidden_state', 'value', 'policy', 'chance'])
 
@@ -141,12 +149,12 @@ def my_adjust_dims(inputs, expected_shape_length, axis = 0):
 	'''
 	axises = len(inputs.shape)
 	delta = axises-expected_shape_length
-	if delta<0:
+	if delta < 0:
 		if axis == 0 or axis == 1:
 			inputs = np.expand_dims(inputs, axis = list(range(-delta)))
 		else:
 			inputs = np.expand_dims(inputs, axis = list(range(delta, 0)))
-	if delta>0:
+	if delta > 0:
 		if axis == 0 or axis == 2:
 			inputs = inputs.reshape((*inputs.shape[:-delta-1], -1))
 		else:
@@ -192,7 +200,7 @@ class AbstractNetwork(ABC):
 		#value is in logits
 		pass
 	
-	def initial_inference(self, observation)->NetworkOutput:
+	def initial_inference(self, observation) -> NetworkOutput:
 		'''
 		directly inference, for training and reanalyze
 		input shape: batch, channel, width, height
@@ -204,7 +212,7 @@ class AbstractNetwork(ABC):
 		#policy:batch, 4
 		#value:batch, 1 if not support, else batch, support*2+1
 		return NetworkOutput(policy = policy, value = value, reward = None, hidden_state = hidden_state)
-	def recurrent_inference(self, hidden_state, action, matrix = False)->NetworkOutput:
+	def recurrent_inference(self, hidden_state, action, matrix = False) -> NetworkOutput:
 		'''
 		directly inference, for training
 		'''
@@ -510,9 +518,13 @@ class Manager:
 	
 	input to each network for a single prediction should be in [*expected_shape], rather than [batch_size(1), *expected_shape]
 		process in self.prediction_worker
-		and observation can be flattened or not
+	
+	policy is not softmaxed
+	value and reward are scalars
+	chance is softmaxed
 	'''
-	def __init__(self, config, model:AbstractNetwork):
+	def __init__(self, config:my_config.Config, model:AbstractNetwork):
+		self.config=config
 		self.support = config.support
 		self.queue = config.manager_queue
 		self.loop = asyncio.get_event_loop()
@@ -531,7 +543,7 @@ class Manager:
 			self.coroutine_list = [self.prediction_worker()]
 		else:
 			self.coroutine_list = []
-	async def push_queue(self, input:np.array, network:str):#network means which to use. If passing string consumes too much time, pass int instead.
+	async def push_queue(self, input:np.array, network:int):#network means which to use. If passing string consumes too much time, pass int instead.
 		if self.queue:
 			future = self.loop.create_future()
 			item = QueueItem(input, future)
@@ -561,7 +573,7 @@ class Manager:
 					return ret[0][0], support_to_scalar(ret[1], self.support)[0]
 				elif network == 3:#chance
 					ret = self.chance(input)
-					return chance_softmax(ret[0])[0]
+					return softmax_chance(ret[0])[0]
 				else:
 					raise NotImplementedError
 	def add_coroutine_list(self, toadd):
@@ -616,16 +628,15 @@ class Manager:
 					for i in range(batch_size):
 						item_list[i].future.set_result(hidden_state[i])
 				elif id == 1:
-					hidden_state, reward, chance = results
+					hidden_state, reward = results
 					assert hidden_state.shape[0] == batch_size and reward.shape[0] == batch_size, 'sizes of hidden_state('+hidden_state.shape+'), reward('+reward.shape+'), and item_list('+batch_size+') don\'t match, this should never happen.'
 					if self.support:
 						reward = support_to_scalar(reward, self.support, True)
 					else:
 						reward = tf.reshape(reward, (-1))
-					chance = chance_softmax(chance)
 					for i in range(batch_size):
-						item_list[i].future.set_result((hidden_state[i], reward[i], chance[i]))
-						if random.random()<0.02:
+						item_list[i].future.set_result((hidden_state[i], reward[i]))
+						if random.random() < 0.02:
 							print(f'r:{reward[i]}')
 				elif id == 2:
 					policy, value = results
@@ -636,12 +647,13 @@ class Manager:
 						value = tf.reshape(value, (-1))
 					for i in range(batch_size):
 						item_list[i].future.set_result((policy[i], value[i]))
-						if random.random()<0.02:
+						if random.random() < 0.02:
 							print(f'v:{value[i]}')
 				elif id == 3:
 					chance = results
 					assert chance.shape[0] == batch_size, 'sizes of chance('+chance.shape+'), and item_list('+batch_size+') don\'t match, this should never happen.'
-					chance = chance_softmax(chance)
+					chance = softmax_chance(chance)
+					assert chance.shape == (batch_size, 4+2*self.config.board_size**2), f'chance.shape:{chance.shape}'
 					for i in range(batch_size):
 						item_list[i].future.set_result(chance[i])
 class Predictor:
@@ -649,20 +661,20 @@ class Predictor:
 	queuing and predict with manager
 	'''
 	def __init__(self, manager:Manager, config:my_config.Config):
-		self.mode = config.network_type#'resnet'/'fullyconnected'/...
+		self.network_type = config.network_type#'resnet'/'fullyconnected'/...
 		self.queue = config.manager_queue
 		self.manager = manager
 		self.push_queue = manager.push_queue
 		self.config = config
 		
-	async def get_outputs(self, inputs, network):
+	async def get_outputs(self, inputs, network:int):
 		if self.queue:
 			future = await self.push_queue(inputs, network)
 			await future
 			return future.result()
 		else:
 			return await self.push_queue(inputs, network)
-	async def initial_inference(self, observation)->NetworkOutput:
+	async def initial_inference(self, observation) -> NetworkOutput:
 		'''
 		input shape:
 			observation: whether flattened or not and without batchsize
@@ -670,26 +682,28 @@ class Predictor:
 		'''
 		hidden_state = await self.get_outputs(observation, 0)#already scaled
 		policy, value = await self.get_outputs(hidden_state, 2)
-		print(f'value:{value}')
 		return NetworkOutput(reward = 0, hidden_state = hidden_state, value = value, policy = policy)
 
-	async def recurrent_inference(self, hidden_state:np.array, action:np.array, chance:np.array)->NetworkOutput:
+	async def recurrent_inference(self, hidden_state:np.array, action:np.array,random_action:np.array, debug:bool=False) -> NetworkOutput:
 		'''
 		temporarily only for fully connected network.
 		input shape:
 			all be without batchsize
 			hidden_state:(hidden_state_size(32))
 			action:(1) or ()
-			chance:(2, 4, 4)
+			random_action:(1) or ()
 
 			for resnet
 			hidden_state:(num_channels, hidden_state_size_x, hidden_state_size_y)
 		'''
-		if type(action) in (list, np.array):
+		if isinstance(action, list) or isinstance(action, np.array):
+			assert len(action) == 1, f'action is a list, but its length is {len(action)}.'
 			action = action[0]
-		action = action_to_onehot(action, self.config.board_size, matrix = (self.mode == 'resnet'))
-		new_hidden_state, reward, chance = await self.get_outputs([hidden_state, action, chance], 1)#hidden state is already scaled
-		
+		action = action_to_onehot(action, self.config.board_size, matrix = (self.network_type == 'resnet'))
+		random_action = action_to_onehot(random_action, self.config.board_size, matrix = (self.network_type == 'resnet'))
+		new_hidden_state, reward = await self.get_outputs([hidden_state, action, random_action], 1)#hidden state is already scaled
+		if debug:
+			print(f'reward:{reward}')
 		policy, value = await self.get_outputs(new_hidden_state, 2)
 		
 		return NetworkOutput(reward = reward, hidden_state = new_hidden_state, value = value, policy = policy)

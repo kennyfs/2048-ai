@@ -2,12 +2,20 @@
 試圖用Muzero的方法訓練一個2048的模型。  
 參考來源:[別人的完整實作](https://github.com/werner-duvaud/muzero-general)、[Deep Mind 官方虛擬碼(偽代碼)](https://arxiv.org/src/1911.08265v2/anc/pseudocode.py)、[陽明交大論文](https://hdl.handle.net/11296/amnm56)
 ## 進度  
-（待補）
+一開始的想法（bf33080以前）：  
+把action分成兩個type，加入磚塊和移動，並且在game history都紀錄，在dynamics network中也是把兩種action視為一樣的一起做。
+  
+後來覺得隨機的action在搜尋時會很大程度的限制搜尋深度，嘗試把兩種action合併看待，只給神經網路移動的action，因為隨機的改變他應該也能學到，但後來發現[陽明交大論文](https://hdl.handle.net/11296/amnm56)，新增chance網路確實有必要。  
+  
+5a47818時發現optimizer影響很大，SGD就是始終無法fit，調高學習率反而會讓loss無法下降，Adam真的好用很多，不過反而要注意過擬和。  
+  
+目前正在做Squeeze-and-Excitation、把原本合併的action分開（僅selfplay的node，紀錄的gamehistory保持不變）
 ## todo  
+- [X] 修[bug](#Bugs)，目前沒什麼bug
+- [ ] network中prediction worker要處理多輸入
+- [ ] MCTS
 - [ ] 調整訓練參數讓輸出更理想  
 - [ ] 運用多線程增進selfplay效率(似乎有點難)  
-- [X] 修[bug](#Bugs)，目前沒什麼bug
-- [ ] 網路跟其他配套還沒寫好
 ## 理解
 1. value target: bootstrap---value is expectant reward, so expectant score=value+reward in past
 ## 提醒自己

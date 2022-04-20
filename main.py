@@ -409,7 +409,7 @@ class MuZero:
 		with self.file_writer.as_default():
 			self.shared_storage_worker.clear_loss()
 			print(
-				f'Last test score: {info["total_reward"]:6d}. Training step: {info["training_step"]}/{self.config.training_steps}. Played games: {info["num_played_games"]}. Loss: {(sum(info["total_loss"])/len(info["total_loss"]) if len(info["total_loss"])>0 else 0):.3f}',
+				f'Last test score: {info["total_reward"]:6d}. Training step: {info["training_step"]}/{self.config.training_steps}. Played games: {info["num_played_games"]}. Loss: {(sum(info["total_loss"])/len(info["total_loss"]) if len(info["total_loss"]) > 0 else 0):.3f}',
 				#end = "\r",
 			)
 			counter += 1

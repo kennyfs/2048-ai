@@ -45,7 +45,7 @@ class Environment:
 			line = line[::-1]#reverse
 		#move over all blank
 		index = 1
-		while index<self.board_size:
+		while index < self.board_size:
 			forward = index-1
 			while forward >= 0 and line[forward] == 0:
 				line[forward] = line[forward+1]
@@ -54,7 +54,7 @@ class Environment:
 			index += 1
 		#combine
 		for i in range(self.board_size-1):
-			if line[i] == line[i+1] and line[i]>0:
+			if line[i] == line[i+1] and line[i] > 0:
 				line[i] += 1
 				line[i+1] = 0
 				self.score += 2**line[i]
@@ -65,7 +65,7 @@ class Environment:
 		if reverse:
 			line = line[::-1]#reverse
 		return line
-	def step(self, action)->int:#up down left right
+	def step(self, action) -> int:#up down left right
 		'''
 		input: action
 		output: instant reward
@@ -98,7 +98,7 @@ class Environment:
 	def render(self):
 		for i in self.grid:
 			for j in i:
-				if j>0:
+				if j > 0:
 					print(bg+{1:'252'+end+word+'234', 2:'222'+end+word+'234', 3:'208', 4:'202', 5:'166', 6:'196', 7:'227'+end+word+'234', 8:'190'+end+word+'234', 9:'184', 10:'184', 11:'220', 12:'14', }[j]+end+'%3d'%2**j+reset, end = '')
 				else:
 					print('   ', end = '')
@@ -112,7 +112,7 @@ class Environment:
 					return False
 				for dx, dy in ((1, 0), (0, 1)):
 					tx, ty = x+dx, y+dy
-					if tx>self.board_size-1 or ty>self.board_size-1:
+					if tx > self.board_size-1 or ty > self.board_size-1:
 						continue
 					if self.grid[x][y] == self.grid[tx][ty]:
 						return False
@@ -121,7 +121,7 @@ class Environment:
 		return [i for i in range(4) if self.valid(i)]
 	def get_blanks(self):#List[(x, y)] where self[x][y] == 0
 		return [(x, y) for x in range(self.board_size) for y in range(self.board_size) if self.grid[x][y] == 0]
-	def add(self)->int:#Action
+	def add(self) -> int:#Action
 		blank = self.get_blanks()
 		if len(blank) == 0:
 			self.render()
@@ -130,7 +130,7 @@ class Environment:
 		num = 2 if randint(1, 10) == 1 else 1#10% to be a 4(2)
 		self.grid[x][y] = num
 		return add_pos_to_action(x, y, num, self.board_size)
-	def valid(self, action)->bool:
+	def valid(self, action) -> bool:
 		if 0 <= action and action <= 3:#### this needs optimizing
 			tmp = Environment(self.config, board = copy.deepcopy(self.grid))
 			a = copy.deepcopy(tmp.grid)
@@ -146,7 +146,7 @@ class Environment:
 			y = action%self.board_size
 			return self.grid[x][y] == 0
 		raise BaseException('action('+str(action)+') out of range (in Environment.valid)')
-	def get_features(self)->np.array:#given grid, return features for Network input
+	def get_features(self) -> np.array:#given grid, return features for Network input
 		#10^4 times per second
 		grid = np.array(self.grid)
 		result = []
@@ -159,7 +159,7 @@ class Environment:
 		result = np.concatenate([np.expand_dims(np.where(grid == i, 1.0, 0.0), 0) for i in range(1, self.board_size**2+1)], axis = 0)
 		return result
 		'''
-	def random_chance_distribution(self)->np.array:
+	def random_chance_distribution(self) -> np.array:
 		result = np.array(self.grid)
 		result = np.where((result == 0, 1.0, 0.0))
 		result /= np.sum(result)
@@ -175,15 +175,15 @@ class Environment:
 
 def add_pos_to_action(x, y, num, board_size):
 	return 4+x*board_size+y+(num-1)*board_size**2
-def action_to_string(action:int, board_size)->str:
+def action_to_string(action:int, board_size) -> str:
 	if action_to_type(action, board_size) == 0:
 		return (['Up', 'Down', 'Left', 'Right'])[action]
 	#type 1(add tile)
 	x, y, num = add_action_to_pos(action, board_size)
 	return f'Adding a {2**num} at {x}, {y}'
 def action_to_type(action, board_size):
-	assert action >= 0 and action<4+2*board_size**2, f'action is {action}'# very likely impossible
-	if action<4:
+	assert action >= 0 and action < 4+2*board_size**2, f'action is {action}'# very likely impossible
+	if action < 4:
 		return 0
 	return 1
 def add_action_to_pos(Action:int, board_size):
@@ -191,7 +191,7 @@ def add_action_to_pos(Action:int, board_size):
 	return type:
 		x, y, num(1 or 2)
 	'''
-	assert 4 <= Action and Action<4+2*board_size**2
+	assert 4 <= Action and Action < 4+2*board_size**2
 	Action -= 4
 	num = Action//(board_size**2)
 	Action %= board_size**2
