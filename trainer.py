@@ -5,8 +5,10 @@ import time
 import numpy as np
 import tensorflow as tf
 
-import network
 import my_config
+import network
+
+
 def scale_gradient(tensor, scale):
 	"""Scales the gradient for the backward pass."""
 	return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
@@ -46,7 +48,7 @@ class Trainer:
 			)
 		else:
 			raise NotImplementedError(
-				f"{self.config.optimizer} is not implemented. You can change the optimizer manually in trainer.py."
+				f"{self.config.optimizer} is not implemented. You can set up the optimizer manually in trainer.py."
 			)
 
 	def run_update_weights(self, replay_buffer, shared_storage, max_steps = None, force_training:bool = False):#max_steps is for observing loss
@@ -76,6 +78,7 @@ class Trainer:
 				total_loss,
 				value_loss,
 				reward_loss,
+				chance_loss,
 				policy_loss,
 				l2_loss,
 
@@ -99,7 +102,7 @@ class Trainer:
 					"learning_rate": self.optimizer.learning_rate,
 				}
 			)
-			shared_storage.append_loss(total_loss, value_loss, reward_loss, policy_loss, l2_loss)
+			shared_storage.append_loss(total_loss, value_loss, reward_loss, chance_loss, policy_loss, l2_loss)
 			shared_storage.append_output(value_initial, value_recurrent, reward, value_initial_delta, value_recurrent_delta, reward_delta)
 			# Managing the self-play / training ratio
 			print(f'ratio:{self.training_step / max(1, shared_storage.get_info("num_played_steps"))}')
@@ -118,6 +121,7 @@ class Trainer:
 		"""
 		(
 			observation_batch,
+			target_chance_batch,
 			action_batch,
 			target_value_batch,
 			target_reward_batch,
@@ -139,6 +143,7 @@ class Trainer:
 		priorities = np.zeros_like(target_value_scalar)
 
 		# observation_batch: batch, channels, height, width
+		# target_chance_batch: batch, num_unroll_steps(no +1), 2 or 1, board size, board size
 		# action_batch: batch, num_unroll_steps # UDLR
 		# target_value_batch: batch, num_unroll_steps+1 #+1 for the those of initial reference
 		# target_reward_batch: batch, num_unroll_steps+1
@@ -149,15 +154,18 @@ class Trainer:
 		else:
 			target_value_batch = np.expand_dims(target_value_batch, axis = -1)
 			target_reward_batch = np.expand_dims(target_reward_batch, axis = -1)
+		target_chance_batch = np.reshape(target_chance_batch, (self.batch_size, self.num_unroll_steps, -1))#flatten for entropy loss
 		# target_value: batch, num_unroll_steps+1, 2*support+1
 		# target_reward: batch, num_unroll_steps+1, 2*support+1
+		# target_chance: batch, (2*) board size**2
 
 		# if not using support
 		# target_value: batch, num_unroll_steps+1
 		# target_reward: batch, num_unroll_steps+1
 		assert (
 			list(observation_batch.shape) == [self.batch_size]+self.config.observation_shape and
-			list(action_batch.shape) == [self.batch_size, self.num_unroll_steps] and
+			list(target_chance_batch.shape) == [self.batch_size, self.num_unroll_steps, self.config.chance_output*self.config.board_size**2] and
+			list(action_batch.shape) == [self.batch_size, self.num_unroll_steps, 2] and
 			list(target_value_batch.shape) == [self.batch_size, self.num_unroll_steps+1, 2*self.config.support+1] and
 			list(target_reward_batch.shape) == [self.batch_size, self.num_unroll_steps+1, 2*self.config.support+1] and
 			list(target_policy_batch.shape) == [self.batch_size, self.num_unroll_steps+1, 4] and
@@ -171,6 +179,7 @@ class Trainer:
 		last_loss = tmp()
 		last_value_loss = tmp()
 		last_reward_loss = tmp()
+		last_chance_loss = tmp()
 		last_policy_loss = tmp()
 		last_l2_loss = tmp()
 
@@ -190,9 +199,13 @@ class Trainer:
 			reward = np.zeros_like(value)
 			policy_logits = output.policy
 			predictions = [(value, reward, policy_logits)]
+			chances = []
 			for i in range(self.num_unroll_steps):### start to check data processing here
+				action = np.concatenate([np.expand_dims(network.action_to_onehot(action, self.config.board_size, matrix = self.config.network_type == 'resnet'), axis = 0) for action in action_batch[:, i, 0]], axis = 0)
+				chance = self.model.chance([hidden_state, action])
+				chances.append(chance)
 				output = self.model.recurrent_inference(
-					hidden_state, action_batch[:, i]
+					hidden_state, action_batch[:, i, 0], action_batch[:, i, 1]
 				)
 				reward = output.reward
 				hidden_state = output.hidden_state
@@ -206,8 +219,9 @@ class Trainer:
 			#maybe there should be more assertion
 			
 			#predictions[t] = output at time t*2
-			# predictions: num_unroll_steps/2+1, 3, (batch, (2*support+1 | 2*support+1 | 9)) (according to the 2nd dim)
-			total_value_loss, total_reward_loss, total_policy_loss = tf.zeros((self.batch_size)), tf.zeros((self.batch_size)), tf.zeros((self.batch_size))
+			# predictions: num_unroll_steps+1, 3(batch, (2*support+1 | 2*support+1 | 9)) (according to the 2nd dim)
+			# chances : num_unroll_steps, batch, chance_output*board_size**2
+			total_value_loss, total_reward_loss, total_chance_loss, total_policy_loss = [tf.zeros((self.batch_size)) for _ in range(4)]
 			# shape of losses: batch_size
 			for i, prediction in enumerate(predictions):
 				value, reward, policy_logits = prediction
@@ -243,16 +257,22 @@ class Trainer:
 					np.abs(pred_value_scalar - target_value_scalar[:, i])
 					** self.config.PER_alpha
 				)
+			for i, chance in enumerate(chances):
+				chance = tf.reshape(chance, (self.batch_size, -1))
+				target_chance = target_chance_batch[:, i, :]
+				_, _, chance_loss = self.loss_function(None, None, chance, None, None, target_chance, False)
+				total_chance_loss += scale_gradient(chance_loss, 1.0/self.num_unroll_steps)
 			# Scale the value loss, paper recommends by 0.25 (See paper appendix Reanalyze)
 			if self.config.PER:
-				total_value_loss -= weight_batch
-				total_reward_loss -= weight_batch
-				total_policy_loss -= weight_batch
-			loss = (total_value_loss * self.config.loss_weights[0] + total_reward_loss * self.config.loss_weights[1] + total_policy_loss * self.config.loss_weights[2])/sum(self.config.loss_weights)
+				total_value_loss *= weight_batch
+				total_reward_loss *= weight_batch
+				total_chance_loss *= weight_batch
+				total_policy_loss *= weight_batch
+			loss = total_value_loss * self.config.loss_weights[0] + total_reward_loss * self.config.loss_weights[1] + total_chance_loss * self.config.loss_weights[2] + total_policy_loss * self.config.loss_weights[3]
 			'''if self.config.PER:
 				# Correct PER bias by using importance-sampling (IS) weights
 				# this is why value_loss*weight+reward_loss+policy_loss != total_loss
-				loss -= weight_batch'''
+				loss *= weight_batch'''
 
 			# (Deepmind's pseudocode do sum, and werner-duvaud/muzero-general do mean. Both are the same.)
 			loss = tf.math.reduce_mean(loss)#now loss is a scalar
@@ -261,6 +281,7 @@ class Trainer:
 				last_loss.set(loss.numpy())
 				last_value_loss.set(tf.math.reduce_mean(total_value_loss).numpy())
 				last_reward_loss.set(tf.math.reduce_mean(total_reward_loss).numpy())
+				last_chance_loss.set(tf.math.reduce_mean(total_chance_loss).numpy())
 				last_policy_loss.set(tf.math.reduce_mean(total_policy_loss).numpy())
 				last_l2_loss.set(l2_loss.numpy())
 				step.set(step.value+1)
@@ -277,6 +298,7 @@ class Trainer:
 		print(f'''last_loss:{last_loss.value},
 last_value_loss:{last_value_loss.value},
 last_reward_loss:{last_reward_loss.value},
+last_chance_loss:{last_chance_loss.value},
 last_policy_loss:{last_policy_loss.value},
 last_l2_loss:{last_l2_loss.value}''')
 		return (
@@ -285,6 +307,7 @@ last_l2_loss:{last_l2_loss.value}''')
 			last_loss.value,
 			last_value_loss.value,
 			last_reward_loss.value,
+			last_chance_loss.value,
 			last_policy_loss.value,
 			last_l2_loss.value,
 
@@ -317,10 +340,11 @@ last_l2_loss:{last_l2_loss.value}''')
 	):
 		# Cross-entropy seems to have a better convergence than MSE
 		if using_support:
-			value_loss = tf.nn.softmax_cross_entropy_with_logits(target_value, value)
-			reward_loss = tf.nn.softmax_cross_entropy_with_logits(target_reward, reward)
+			value_loss = tf.nn.softmax_cross_entropy_with_logits(target_value, value) if value is not None else None
+			reward_loss = tf.nn.softmax_cross_entropy_with_logits(target_reward, reward) if reward is not None else None
 		else:
-			value_loss = tf.keras.losses.MeanSquaredError()(target_value, value)
-			reward_loss = tf.keras.losses.MeanSquaredError()(target_reward, reward)
-		policy_loss = tf.nn.softmax_cross_entropy_with_logits(target_policy, policy_logits)
+			value_loss = tf.keras.losses.MeanSquaredError()(target_value, value) if value is not None else None
+			reward_loss = tf.keras.losses.MeanSquaredError()(target_reward, reward) if reward is not None else None
+		policy_loss = tf.nn.softmax_cross_entropy_with_logits(target_policy, policy_logits) if policy_logits is not None else None
+		#maybe I should add a loss function for chance
 		return value_loss, reward_loss, policy_loss

@@ -1,6 +1,8 @@
-import numpy as np
-import os
 import datetime
+import os
+
+import numpy as np
+
 
 def default_visit_softmax_temperature(num_moves = 0, training_steps = 0):
 	if training_steps < 50e3:
@@ -88,7 +90,6 @@ class Config:
 		self.policy_layers = []
 		self.reward_layers = [128]
 		
-		self.chance_filters = [32, 8] # times 1/4 per layer
 		self.chance_output = 1
 		### Training
 		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
@@ -110,12 +111,12 @@ class Config:
 		self.td_steps = td_steps
 		self.optimizer = 'Adam'
 		self.momentum = 0.9
-		self.loss_weights = [1, 4, 4]#See paper appendix H Reanalyze
+		self.loss_weights = [1, 4, 4, 4]#See paper appendix H Reanalyze
+		#value reward chance policy
 		s = sum(self.loss_weights)
 		for i in range(3):
 			self.loss_weights[i] /= s
 		self.l2_weight = 1e-3 if self.optimizer == 'SGD' else 1e-4
-		#value reward policy
 		self.training_steps_per_batch = 10
 		self.save_model = True
 		#self.weight_decay = 1e-4 #useless for now
@@ -151,7 +152,7 @@ class Config:
 		self.num_selfplay_game_per_iteration = 1
 		self.num_random_games_per_iteration = 10000
 		#manager config
-		self.manager_queue = True
+		self.manager_queue = False
 
 		#experiment
 		self.winer_takes_all = False

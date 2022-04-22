@@ -305,6 +305,7 @@ class MuZero:
 				"total_loss",
 				"value_loss",
 				"reward_loss",
+				"chance_loss",
 				"policy_loss",
 				"l2_loss",
 
@@ -345,7 +346,7 @@ class MuZero:
 			)
 			if log_training_config == 1:
 				#log all loss
-				for total_loss, value_loss, reward_loss, policy_loss, l2_loss, value_initial, value_recurrent, reward, value_initial_delta, value_recurrent_delta, reward_delta in zip(info["total_loss"], info["value_loss"], info["reward_loss"], info["policy_loss"], info["l2_loss"], info['value_initial'], info['value_recurrent'], info['reward'], info['value_initial_delta'], info['value_recurrent_delta'], info['reward_delta']):
+				for total_loss, value_loss, reward_loss, chance_loss, policy_loss, l2_loss, value_initial, value_recurrent, reward, value_initial_delta, value_recurrent_delta, reward_delta in zip(info["total_loss"], info["value_loss"], info["reward_loss"], info["chance_loss"], info["policy_loss"], info["l2_loss"], info['value_initial'], info['value_recurrent'], info['reward'], info['value_initial_delta'], info['value_recurrent_delta'], info['reward_delta']):
 					#tf.summary.scalar(
 					#	"3.Trainer_worker/1.training_step", training_step, training_counter,
 					#)
@@ -359,10 +360,13 @@ class MuZero:
 						"3.Trainer_worker/4.reward_loss", reward_loss, training_counter
 					)
 					tf.summary.scalar(
-						"3.Trainer_worker/5.policy_loss", policy_loss, training_counter
+						"3.Trainer_worker/5.chance_loss", chance_loss, training_counter
 					)
 					tf.summary.scalar(
-						"3.Trainer_worker/6.l2_loss", l2_loss, training_counter
+						"3.Trainer_worker/6.policy_loss", policy_loss, training_counter
+					)
+					tf.summary.scalar(
+						"3.Trainer_worker/7.l2_loss", l2_loss, training_counter
 					)
 
 					tf.summary.scalar(

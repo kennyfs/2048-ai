@@ -79,17 +79,18 @@ class ReplayBuffer:
 		(
 			index_batch,
 			observation_batch,
+			chance_batch,
 			action_batch,
 			reward_batch,
 			value_batch,
 			policy_batch,
-		) = ([], [], [], [], [], [])
+		) = ([], [], [], [], [], [], [])
 		weight_batch = [] if self.config.PER else None
 
 		for game_id, game_history, game_prob in self.sample_n_games(batch_size):
 			game_pos, pos_prob = self.sample_position(game_history)
 
-			values, rewards, policies, actions = self.make_target(
+			values, rewards, chances, policies, actions = self.make_target(
 				game_history, game_pos
 			)
 
@@ -98,6 +99,7 @@ class ReplayBuffer:
 			if self.rotate:
 				rotate = random.randint(0, 3)
 				observation = np.rot90(observation, rotate, (1, 2))
+				chances = np.rot90(chances, rotate, (2, 3))
 				#UDLR to LRDU to DURL to RLUD
 				#U to L, 0 to 2
 				#D to R, 1 to 3
@@ -105,20 +107,22 @@ class ReplayBuffer:
 				#R to U, 3 to 0
 				dict = {0:2, 1:3, 2:1, 3:0}
 				for _ in range(rotate):
-					actions = [dict[action] for action in actions]
+					actions = [[dict[action], random_action] for action, random_action in actions]
 
 					policies = [[policy[3], policy[2], policy[0], policy[1]] for policy in policies]
 			if self.flip and random.randint(0, 1) == 1:
 				observation = np.flip(observation, 1)
+				chances = np.flip(chances, 2)
 				#U to D, 0 to 1
 				#D to U, 1 to 0
 				dict = {0:1, 1:0, 2:2, 3:3}
-				actions = [dict[action] for action in actions]
+				actions = [[dict[action], random_action] for action, random_action in actions]
 
-				policies = [[policy[1], policy[0], policy[2], policy[3]]for policy in policies]
+				policies = [[policy[1], policy[0], policy[2], policy[3]] for policy in policies]
 			observation_batch.append(
 				observation
 			)
+			chance_batch.append(chances)
 			action_batch.append(actions)
 			value_batch.append(values)
 			reward_batch.append(rewards)
@@ -141,6 +145,7 @@ class ReplayBuffer:
 			index_batch,
 			(
 				np.array(observation_batch, dtype = np.float32),
+				np.array(chance_batch, dtype = np.float32),
 				np.array(action_batch, dtype = np.int32),
 				np.array(value_batch, dtype = np.float32),
 				np.array(reward_batch, dtype = np.float32),
@@ -252,7 +257,7 @@ class ReplayBuffer:
 			# The value is oriented from the perspective of the current player
 			value += reward * self.config.discount_to_n[i]
 		return value
-	def make_target(self, game_history, state_index):
+	def make_target(self, game_history:self_play.GameHistory, state_index:int):
 		"""
 		Generate targets for every unroll steps.
 		only generate for actions with type 0
@@ -260,26 +265,30 @@ class ReplayBuffer:
 		#another idea: value: the same function, reward: 0, policy: uniform
 		#this may improve quality of dynamics model
 		"""
-		target_values, target_rewards, target_policies, actions = [], [], [], []
+		target_values, target_rewards, target_policies, target_chances, actions = [], [], [], [], []
 		### todo: ensure data processing is all right
 		#現在應該是正確的
 		target_values.append(self.compute_target_value(game_history, state_index))
 		target_policies.append(game_history.child_visits[state_index])
 		target_rewards.append(0)
 		#for initial reference
+		dummy_chance = np.ones((self.config.chance_output, self.config.board_size, self.config.board_size), dtype = np.float32)
+		dummy_chance /= np.sum(dummy_chance)
 		for current_index in range(
 			state_index+1, state_index + self.config.num_unroll_steps + 1#+1 to +num_unroll_steps
 		):
 			value = self.compute_target_value(game_history, current_index)
 			if current_index < game_history.length-1:
-				actions.append(game_history.action_history[current_index][0])
+				actions.append(game_history.action_history[current_index])
 				target_rewards.append(game_history.reward_history[current_index])
 
 				target_values.append(value)
 				target_policies.append(game_history.child_visits[current_index])
+
+				target_chances.append(game_history.chance_history[current_index])
 			elif current_index == game_history.length-1:
 				#The game has ended, so value and policy are just the value of dummy.
-				actions.append(game_history.action_history[current_index][0])
+				actions.append(game_history.action_history[current_index])
 				target_rewards.append(game_history.reward_history[current_index])
 
 				target_values.append(0)
@@ -290,6 +299,8 @@ class ReplayBuffer:
 						for _ in self.config.action_space_type0
 					]
 				)
+
+				target_chances.append(dummy_chance)
 			else:
 				# States past the end of games are treated as absorbing states
 				target_values.append(0)
@@ -301,9 +312,12 @@ class ReplayBuffer:
 						for _ in self.config.action_space_type0
 					]
 				)
-				actions.append(np.random.choice(self.config.action_space_type0))
+
+				target_chances.append(dummy_chance)
+				actions.append([np.random.choice(self.config.action_space_type0), np.random.choice(self.config.action_space_type1)])
 		return 	(np.array(target_values, dtype = np.float32),
 				np.array(target_rewards, dtype = np.float32),
+				np.array(target_chances, dtype = np.float32),#num_unroll_steps, 2 or 1, board_size, board_size
 				np.array(target_policies, dtype = np.float32),
 				np.array(actions, dtype = np.int32))
 

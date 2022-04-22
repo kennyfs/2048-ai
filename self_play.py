@@ -1,19 +1,18 @@
 import asyncio
 import collections
-import copy
 import math
 import pickle
-import environment
-import random
-import sys
 
 import numpy as np
 import tensorflow as tf
-import network
+
+import environment
 import my_config
+import network
+
 MAXIMUM_FLOAT_VALUE = float('inf')
 KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
-class MinMaxStats():
+class MinMaxStats:
 	"""A class that holds the min-max values of the tree."""
 
 	def __init__(self, known_bounds:KnownBounds = None):
@@ -42,6 +41,7 @@ class GameHistory:
 	#states followed by actions of type x = "type x state"
 	def __init__(self):
 		self.observation_history = []
+		self.chance_history = []
 		self.child_visits = []
 		self.root_values = []
 
@@ -113,7 +113,10 @@ class GameHistory:
 		return stacked_observations
 	def get_observation(self, index):
 		index = index % self.length
-		return self.observation_history[index].copy()
+		return np.copy(self.observation_history[index])
+	def get_chance(self, index):
+		index = index % self.length
+		return np.copy(self.chance_history[index])
 	def save(self, file):
 		with open(file, 'w') as F:
 			F.write(f'{self.initial_add[0]}\n')
@@ -135,7 +138,7 @@ class GameHistory:
 				reward = env.step(actions[0])
 				env.step(actions[1])#very important
 				self.observation_history.append(env.get_features())
-
+				self.chance_history.append(env.get_chance_features())
 				last_index = index+1
 				index = line.find(' ', last_index)#[last_index, index) is reward
 				self.reward_history.append(reward)
@@ -172,15 +175,16 @@ class GameHistory:
 		#### 	todo: played games' winer takes all
 		# 		maybe process after save game to file
 		self.length = len(self.root_values)
-	def add(self, action, observation, reward):
+	def add(self, action, observation, chance, reward):
 		self.action_history.append(action)
 		self.observation_history.append(observation)
+		self.chance_history.append(chance)
 		self.reward_history.append(reward)
 		self.length += 1
 	def addtile(self, action):
 		self.initial_add.append(action)
 	def __str__(self):
-		return f'observation:\n{self.observation_history}\n\naction:\n{self.action_history}\n\nreward:\n{self.reward_history}\n\nchild_visits:\n{self.child_visits}\n\nvalue:\n{self.root_values}'
+		return f'observation:\n{self.observation_history}\n\nchance:\n{self.chance_history}\n\naction:\n{self.action_history}\n\nreward:\n{self.reward_history}\n\nchild_visits:\n{self.child_visits}\n\nvalue:\n{self.root_values}'
 class MCTS:
 	"""
 	Core Monte Carlo Tree Search algorithm.
@@ -212,7 +216,7 @@ class MCTS:
 			root_predicted_value = None
 		else:
 			#defaulted not to use previously searched nodes and create a new tree
-			root = Node(0, False)
+			root = Node(0, self.config, False)
 			self.predictor.manager.add_coroutine_list(self.predictor.initial_inference(observation))
 			output = self.predictor.manager.run_coroutine_list(True)[0]
 			root_predicted_value = output.value
@@ -246,9 +250,64 @@ class MCTS:
 		min_max_stats = MinMaxStats()
 
 		#max_tree_depth = 0
-		for _ in range(self.config.num_simulations):
-			self.predictor.manager.add_coroutine_list(self.tree_search(root, min_max_stats))
-		self.predictor.manager.run_coroutine_list()
+		if self.config.manager_queue:
+			for _ in range(self.config.num_simulations):
+				self.predictor.manager.add_coroutine_list(self.tree_search(root, min_max_stats))
+			self.predictor.manager.run_coroutine_list()
+		else:
+			for _ in range(self.config.num_simulations):
+				node = root
+				#root is a move node
+				action, random_node = node.select_child(min_max_stats)
+
+				search_path = [node, random_node]
+				#node is a random node
+				last_node_random = True
+				while random_node.expanded():
+					random_action, node = random_node.select_child(min_max_stats)
+					search_path.append(node)
+					if not node.expanded():
+						last_node_random = False
+						break
+					action, random_node = node.select_child(min_max_stats)
+					search_path.append(random_node)
+				#o as move node, x as random node
+				if last_node_random:
+					#last 2 nodes: o-x
+					#get hidden state from o, get action from choosing x
+					action_onehot = network.action_to_onehot(action, self.config.board_size, matrix = (self.config.network_type == 'resnet'))
+					self.predictor.manager.add_coroutine_list(self.predictor.chance(node.hidden_state, action_onehot))
+					chance = self.predictor.manager.run_coroutine_list(True)[0]
+
+					#chance is a np.array with shape 4+2*board_size**2
+					random_node.expand(
+						self.config.action_space_type1,
+						random_node.reward,
+						chance,
+						None,
+					)
+					random_action, node = random_node.select_child(min_max_stats)
+					search_path.append(node)
+
+				#last 3 nodes: o-x-o
+				#get hidden_state from the first o, get action from choosing x, get random action from choosing the second o
+				self.predictor.manager.add_coroutine_list(self.predictor.recurrent_inference(
+					search_path[-3].hidden_state,
+					action,
+					random_action,
+				))
+				output = self.predictor.manager.run_coroutine_list(True)[0]
+				#generate policy, value, reward for the second o
+				#backpropagate value, set reward for the second o, set policy for the children(new x)
+				node.expand(
+					self.config.action_space_type0,
+					output.reward,
+					tf.nn.softmax(output.policy),
+					output.hidden_state,
+				)
+				#reward is initially stored in x, and o contains its father's reward
+				
+				self.backpropagate(search_path, output.value, min_max_stats)
 		#extra_info = {
 		#	'root_predicted_value': root_predicted_value,
 		#}#sometimes useful for debugging or playing?
@@ -277,12 +336,13 @@ class MCTS:
 				while random_node in self.now_expanding:
 					await asyncio.sleep(1e-4)
 			#o as move node, x as random node
+			self.now_expanding.add(random_node)
+			print(f'add {random_node}')
 			if last_node_random:
 				#last 2 nodes: o-x
 				#get hidden state from o, get action from choosing x
-				self.now_expanding.add(random_node)
-				action = network.action_to_onehot(action, self.config.board_size, matrix = (self.config.network_type == 'resnet'))
-				chance = await self.predictor.get_outputs([node.hidden_state, action], 3)
+				action_onehot = network.action_to_onehot(action, self.config.board_size, matrix = (self.config.network_type == 'resnet'))
+				chance = await self.predictor.get_outputs([node.hidden_state, action_onehot], 3)
 				#chance is a np.array with shape 4+2*board_size**2
 				random_node.expand(
 					self.config.action_space_type1,
@@ -311,9 +371,9 @@ class MCTS:
 			#reward is initially stored in x, and o contains its father's reward
 			
 			self.backpropagate(search_path, output.value, min_max_stats)
-			if last_node_random:
-				self.now_expanding.remove(random_node)
-			else:
+			print(f'remove {random_node}')
+			self.now_expanding.remove(random_node)
+			if not last_node_random:
 				self.now_expanding.remove(node)
 
 	def backpropagate(self, search_path, value, min_max_stats):
@@ -330,7 +390,7 @@ class MCTS:
 
 		 
 class Node:
-	def __init__(self, prior, random=False):
+	def __init__(self, prior, config:my_config.Config, random=False):
 		self.visit_count = 0
 		self.prior = prior
 		self.value_sum = 0
@@ -338,6 +398,10 @@ class Node:
 		self.hidden_state = None
 		self.reward = 0
 		self.random=random
+		
+		self.config=config
+		self.pb_c_base=config.pb_c_base
+		self.pb_c_init=config.pb_c_init
 	def expanded(self):
 		return len(self.children) > 0
 
@@ -358,9 +422,11 @@ class Node:
 			actions = list(range(actions))
 		self.reward = reward
 		self.hidden_state = hidden_state
+		policy = np.where(policy > threshold_for_policy, policy, 0)
+		policy /= np.sum(policy)
 		for action in actions:
-			if policy[action] >= threshold_for_policy:
-				self.children[action] = Node(policy[action], random = not self.random)
+			if policy[action] > 0:
+				self.children[action] = Node(policy[action], self.config, random = not self.random)
 	def add_exploration_noise(self, dirichlet_alpha, exploration_fraction):
 		"""
 		At the start of each search, we add dirichlet noise to the prior of the root to
@@ -403,9 +469,9 @@ class Node:
 		assert self.random == False, f'ucb_score should not be called for random nodes'
 		pb_c = (
 			math.log(
-				(self.visit_count + self.config.pb_c_base + 1) / self.config.pb_c_base
+				(self.visit_count + self.pb_c_base + 1) / self.pb_c_base
 			)
-			+ self.config.pb_c_init
+			+ self.pb_c_init
 		)
 		pb_c *= math.sqrt(self.visit_count) / (child.visit_count + 1)
 
@@ -535,10 +601,10 @@ class SelfPlay:
 
 			game_history.store_search_statistics(root, self.config.action_space_type0)
 
-
+			chance = game.get_chance_features()
 			#add a tile
 			addaction = game.add()
-			game_history.add([action, addaction], observation, reward)
+			game_history.add([action, addaction], observation, chance, reward)
 			if render:
 				game.render()
 			
@@ -588,8 +654,9 @@ class SelfPlay:
 				action = np.random.choice(game.legal_actions())
 				observation = game.get_features()
 				reward = game.step(action)
+				chance = game.get_chance_features()
 				addaction = game.add()
-				game_history.add([action, addaction], observation, reward)
+				game_history.add([action, addaction], observation, chance, reward)
 				game_history.store_search_statistics(None, self.config.action_space_type0)
 				done = game.finish()
 				if render:

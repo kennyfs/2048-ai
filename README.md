@@ -12,8 +12,9 @@
 目前正在做Squeeze-and-Excitation、把原本合併的action分開（僅selfplay的node，紀錄的gamehistory保持不變）
 ## todo  
 - [X] 修[bug](#Bugs)，目前沒什麼bug
-- [ ] network中prediction worker要處理多輸入
-- [ ] MCTS
+- [X] network中prediction worker要處理多輸入
+- [X] MCTS
+- [ ] 增進訓練效率（加入chance之後時間大約變成兩三倍，目前懷疑是loss_fn呼叫chance network跟recurrent inference都各自多轉換一次action）
 - [ ] 調整訓練參數讓輸出更理想  
 - [ ] 運用多線程增進selfplay效率(似乎有點難)  
 ## 理解

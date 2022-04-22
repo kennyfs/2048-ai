@@ -1,6 +1,6 @@
+import copy
 import random
 import sys
-import copy
 from random import randint
 from time import sleep
 
@@ -159,9 +159,14 @@ class Environment:
 		result = np.concatenate([np.expand_dims(np.where(grid == i, 1.0, 0.0), 0) for i in range(1, self.board_size**2+1)], axis = 0)
 		return result
 		'''
-	def random_chance_distribution(self) -> np.array:
+	def get_chance_features(self) -> np.array:
 		result = np.array(self.grid)
-		result = np.where((result == 0, 1.0, 0.0))
+		result = np.expand_dims(np.where(result == 0, 1.0, 0.0), 0)
+		if self.config.chance_output == 2:
+			result = np.concatenate([result*9, result], axis = 0)
+		#flatten
+		if np.sum(result) == 0:
+			result = np.ones((self.config.chance_output, self.config.board_size, self.config.board_size), dtype = np.float32)
 		result /= np.sum(result)
 		return result
 	def human_to_action(self):
@@ -175,6 +180,16 @@ class Environment:
 
 def add_pos_to_action(x, y, num, board_size):
 	return 4+x*board_size+y+(num-1)*board_size**2
+def add_action_to_pos(Action:int, board_size):
+	'''
+	return type:
+		x, y, num(1 or 2)
+	'''
+	assert 4 <= Action and Action < 4+2*board_size**2
+	Action -= 4
+	num = Action//(board_size**2)
+	Action %= board_size**2
+	return Action//board_size, Action%board_size, num+1
 def action_to_string(action:int, board_size) -> str:
 	if action_to_type(action, board_size) == 0:
 		return (['Up', 'Down', 'Left', 'Right'])[action]
@@ -186,13 +201,3 @@ def action_to_type(action, board_size):
 	if action < 4:
 		return 0
 	return 1
-def add_action_to_pos(Action:int, board_size):
-	'''
-	return type:
-		x, y, num(1 or 2)
-	'''
-	assert 4 <= Action and Action < 4+2*board_size**2
-	Action -= 4
-	num = Action//(board_size**2)
-	Action %= board_size**2
-	return Action//board_size, Action%board_size, num+1
