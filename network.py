@@ -2,11 +2,11 @@ import asyncio
 import collections
 import random
 from abc import ABC, abstractmethod
+import time
 
 import numpy as np
 import tensorflow as tf
 
-import environment
 import my_config
 
 
@@ -28,6 +28,7 @@ def scale_hidden_state(to_scale_hidden_state:np.array):
 		encoded_state_normalized = tf.reshape(encoded_state_normalized, shape)#and reshape to original shape
 	return encoded_state_normalized
 	
+@tf.function
 def support_to_scalar(logits, support_size, from_logits = True):# logits is in shape (batch_size, full_support_size)
 	"""
 	Transform a categorical representation to a scalar
@@ -87,33 +88,39 @@ def scalar_to_support(x, support_size):
 	)
 	logits = tf.reshape(logits, (*original_shape, -1))
 	return logits
-def action_to_onehot(action, board_size, matrix):
-	if type(action) == list or type(action) == np.array:
-		action = action[0]
-	action = int(action)
-	assert action >= 0 and action < 4, f'action:{action}'
-	if matrix:
-		#4 planes for UDLR, next 2 planes for putting 2 or 4
-		ret = np.zeros((4, board_size, board_size), dtype = np.float32)
-		ret[action, :, :] = 1/(board_size**2)
-	else:
-		ret = np.zeros((4), dtype = np.float32)
-		ret[action] = 1.
+def action_to_onehot(action, board_size):
+	only_one = False
+	if len(action.shape) == 0:
+		only_one = True
+		action = tf.cast(tf.expand_dims(action, axis = 0), dtype = tf.int32)#treat it as (1)
+	batch_size = action.shape[0]
+	indices = tf.concat((tf.expand_dims(tf.range(batch_size), axis = -1), tf.expand_dims(action, axis = -1)), axis = -1)
+	# action: (batch)
+	# output: (batch, 4, board_size, board_size)
+	# indices: (batch, 2)# batch (tf.range(batch)), action concatenated
+	# updates: tf.ones((batch, board_size, board_size))/ (board_size**2)
+	ret = tf.scatter_nd(indices, tf.ones((batch_size, board_size, board_size))/(board_size**2), (batch_size, 4, board_size, board_size))
+	if only_one:
+		ret = tf.reshape(ret, (4, board_size, board_size))
 	return ret
-def random_action_to_onehot(action, board_size, matrix):
-	if type(action) == list or type(action) == np.array:
-		action = action[0]
-	action = int(action)
-	assert action >= 4 and action < 4 + 2*board_size**2
-	if matrix:
-		#4 planes for UDLR, next 2 planes for putting 2 or 4
-		ret = np.zeros((2, board_size, board_size), dtype = np.float32)
-		x, y, num = environment.add_action_to_pos(action, board_size)
-		ret[num-1][x][y]=1.
-	else:
-		ret = np.zeros((2*board_size**2), dtype = np.float32)
-		ret[action-4] = 1.
+@tf.function
+def random_action_to_onehot(action, board_size):#defaulted for matrix
+	only_one = False
+	if len(action.shape) == 0:
+		only_one = True
+		action = tf.cast(tf.expand_dims(action, axis = 0), dtype = tf.int32)#treat it as (1)
+	batch_size = action.shape[0]
+	action -= 4
+	# action: (batch)
+	# output: (batch, 2, board_size, board_size) #reshaped from (batch, 2*board_size**2)
+	# indices: (batch, 2) #tf.range(batch) concatenated with action, resulting in something like (0,4), (1,5)
+	indices = tf.concat((tf.expand_dims(tf.range(batch_size), 1), tf.expand_dims(action, 1)), axis = 1)
+	ret = tf.scatter_nd(indices, tf.ones((batch_size)), (batch_size, 2*board_size**2))
+	ret = tf.reshape(ret, (batch_size, 2, board_size, board_size))
+	if only_one:
+		ret = tf.reshape(ret, (2, board_size, board_size))
 	return ret
+@tf.function
 def softmax_chance(chance):
 	#batched
 	assert len(chance.shape) == 4
@@ -122,11 +129,11 @@ def softmax_chance(chance):
 	if chance.shape[1:] == [1, board_size, board_size]:
 		chance = tf.reshape(chance, (batch, board_size**2))
 		chance = tf.nn.softmax(chance, axis = -1)
-		chance = np.concatenate([np.zeros([batch,4]),chance*0.9, chance*0.1], axis = 1)
+		chance = tf.concat([np.zeros([batch,4]),chance*0.9, chance*0.1], axis = 1)
 	else:
 		chance = tf.reshape(chance, (batch, 2*board_size**2))
 		chance = tf.nn.softmax(chance, axis = -1)
-		chance = np.concatenate([np.zeros([batch,4]), chance], axis = 1)
+		chance = tf.concat([np.zeros([batch,4]), chance], axis = 1)
 	#output is (batch, 4+2*board_size**2)
 	assert chance.shape == (batch, 4+2*board_size**2)
 	return chance
@@ -208,16 +215,17 @@ class AbstractNetwork(ABC):
 		#policy:batch, 4
 		#value:batch, 1 if not support, else batch, support*2+1
 		return NetworkOutput(policy = policy, value = value, reward = None, hidden_state = hidden_state)
-	def recurrent_inference(self, hidden_state, action_batch, random_action_batch, matrix = True) -> NetworkOutput:
+	def recurrent_inference(self, hidden_state, action_batch, random_action_batch, onehotted = True, matrix = True) -> NetworkOutput:
 		'''
 		directly inference, for training
 		'''
 		#auto detect matrix
 		if not matrix and len(hidden_state.shape) == 4:
 			matrix = True
-		action_onehot = np.concatenate([np.expand_dims(action_to_onehot(action, self.config.board_size, matrix = matrix), axis = 0) for action in action_batch], axis = 0)
-		random_action_onehot = np.concatenate([np.expand_dims(random_action_to_onehot(action, self.config.board_size, matrix = matrix), axis = 0) for action in random_action_batch], axis = 0)
-		hidden_state, reward = self.dynamics([hidden_state, action_onehot, random_action_onehot])
+		if not onehotted:
+			action_batch = action_to_onehot(action_batch, self.config.board_size)
+			random_action_batch = random_action_to_onehot(random_action_batch, self.config.board_size)
+		hidden_state, reward = self.dynamics([hidden_state, action_batch, random_action_batch])
 		hidden_state = scale_hidden_state(hidden_state)
 		policy, value = self.prediction(hidden_state)
 		return NetworkOutput(policy = policy, value = value, reward = reward, hidden_state = hidden_state)
@@ -457,7 +465,7 @@ class ResNetNetwork(AbstractNetwork):
 			config.num_blocks-1,
 			config.chance_output
 		)
-		self.trainable_variables = self.representation_model.trainable_variables+self.dynamics_model.trainable_variables+self.prediction_model.trainable_variables
+		self.trainable_variables = self.representation_model.trainable_variables+self.dynamics_model.trainable_variables+self.chance_model.trainable_variables+self.prediction_model.trainable_variables
 	def representation(self, observation):
 		return scale_hidden_state(self.representation_model(observation))
 	def dynamics(self, input):
@@ -476,7 +484,7 @@ class ResNetNetwork(AbstractNetwork):
 		policy, value = self.prediction_model(hidden_state)
 		return policy, value
 	def get_weights(self):
-		return {'representation':self.representation_model.get_weights(), 'dynamics':self.dynamics_model.get_weights(), 'prediction':self.prediction_model.get_weights(), 'chance':self.chance_model}
+		return {'representation':self.representation_model.get_weights(), 'dynamics':self.dynamics_model.get_weights(), 'prediction':self.prediction_model.get_weights(), 'chance':self.chance_model.get_weights()}
 	def set_weights(self, weights):
 		'''
 		set weights of 3 networks
@@ -692,7 +700,7 @@ class Predictor:
 		policy, value = await self.get_outputs(hidden_state, 2)
 		return NetworkOutput(reward = 0, hidden_state = hidden_state, value = value, policy = policy)
 
-	async def recurrent_inference(self, hidden_state:np.array, action:int, random_action:int, debug:bool=False) -> NetworkOutput:
+	async def recurrent_inference(self, hidden_state:np.array, action:int, random_action:int, onehotted:bool=False, debug:bool=False) -> NetworkOutput:
 		'''
 		input shape:
 			all be without batchsize
@@ -704,8 +712,9 @@ class Predictor:
 			hidden_state:(num_channels, hidden_state_size_x, hidden_state_size_y)
 		'''
 		assert isinstance(action, (int, np.int64)), f'action:{action}, type:{type(action)}'
-		action = action_to_onehot(action, self.config.board_size, matrix = (self.network_type == 'resnet'))
-		random_action = random_action_to_onehot(random_action, self.config.board_size, matrix = (self.network_type == 'resnet'))
+		if not onehotted:
+			action = action_to_onehot(action, self.config.board_size)
+			random_action = random_action_to_onehot(random_action, self.config.board_size)
 		new_hidden_state, reward = await self.get_outputs([hidden_state, action, random_action], 1)#hidden state is already scaled
 		if debug:
 			print(f'reward:{reward}')
@@ -716,9 +725,10 @@ class Predictor:
 		return self.manager.run_coroutine_list()
 	def add_coroutine_list(self, toadd):
 		self.manager.add_coroutine_list(toadd)#if efficiency is too low, directly append to the list'''
-	async def chance(self, hidden_state:np.array, action:int, debug:bool=False) -> np.array:
-		assert isinstance(action, (int, np.int64)), f'action:{action}, type:{type(action)}'
-		action = action_to_onehot(action, self.config.board_size, matrix = (self.network_type == 'resnet'))
+	async def chance(self, hidden_state:np.array, action:int, onehotted = False, debug:bool=False) -> np.array:
+		if not onehotted:
+			assert isinstance(action, (int, np.int64, np.int32)), f'action:{action}, type:{type(action)}'
+			action = action_to_onehot(action, self.config.board_size)
 		chance = await self.get_outputs([hidden_state, action], 3)#hidden state is already scaled
 		if debug:
 			print(chance)

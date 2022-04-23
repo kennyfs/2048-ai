@@ -12,7 +12,7 @@ import network
 def scale_gradient(tensor, scale):
 	"""Scales the gradient for the backward pass."""
 	return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
-
+timers = [0]*10
 class Trainer:
 	"""
 	Class which run in a dedicated thread to train a neural network and save it
@@ -89,6 +89,7 @@ class Trainer:
 				value_recurrent_delta,
 				reward_delta,
 			) = self.update_weights(batch, shared_storage)
+			print([int(t/sum(timers)*100) for t in timers])
 			print(f'training consumed {time.time()-st} seconds.')
 
 			if self.config.PER:
@@ -140,7 +141,10 @@ class Trainer:
 		# Keep values as scalars for calculating the priorities for the prioritized replay
 		target_value_scalar = np.copy(target_value_batch)
 		target_reward_scalar = np.copy(target_reward_batch)
-		priorities = np.zeros_like(target_value_scalar)
+		if self.config.PER:
+			priorities = np.zeros_like(target_value_scalar)
+		else:
+			priorities = None
 
 		# observation_batch: batch, channels, height, width
 		# target_chance_batch: batch, num_unroll_steps(no +1), 2 or 1, board size, board size
@@ -152,9 +156,9 @@ class Trainer:
 			target_value_batch = network.scalar_to_support(target_value_batch, self.config.support)
 			target_reward_batch = network.scalar_to_support(target_reward_batch, self.config.support)
 		else:
-			target_value_batch = np.expand_dims(target_value_batch, axis = -1)
-			target_reward_batch = np.expand_dims(target_reward_batch, axis = -1)
-		target_chance_batch = np.reshape(target_chance_batch, (self.batch_size, self.num_unroll_steps, -1))#flatten for entropy loss
+			target_value_batch = tf.expand_dims(target_value_batch, axis = -1)
+			target_reward_batch = tf.expand_dims(target_reward_batch, axis = -1)
+		target_chance_batch = tf.reshape(target_chance_batch, (self.batch_size, self.num_unroll_steps, -1))#flatten for entropy loss
 		# target_value: batch, num_unroll_steps+1, 2*support+1
 		# target_reward: batch, num_unroll_steps+1, 2*support+1
 		# target_chance: batch, (2*) board size**2
@@ -189,24 +193,47 @@ class Trainer:
 		last_value_recurrent_delta = tmp()
 		last_reward = tmp()
 		last_reward_delta = tmp()
+		method = 2
+		if method == 1:
+			new_action_batch = tf.zeros((self.num_unroll_steps, self.batch_size, 4, self.config.board_size, self.config.board_size))
+			new_random_action_batch = tf.zeros((self.num_unroll_steps, self.batch_size, 2, self.config.board_size, self.config.board_size))
+			for i in range(self.num_unroll_steps):
+				new_action_batch = tf.tensor_scatter_nd_update(new_action_batch, [i], network.action_to_onehot(action_batch[:, i, 0], self.config.board_size))
+				new_random_action_batch = tf.tensor_scatter_nd_update(new_random_action_batch, [i], network.random_action_to_onehot(action_batch[:, i, 1], self.config.board_size))
+		elif method == 2:
+			action_batch = tf.reshape(action_batch, (self.num_unroll_steps*self.batch_size, 2))
+			new_action_batch = network.action_to_onehot(action_batch[:, 0], self.config.board_size)
+			new_random_action_batch = network.random_action_to_onehot(action_batch[:, 1], self.config.board_size)
+			new_action_batch = tf.reshape(new_action_batch, (self.num_unroll_steps, self.batch_size, 4, self.config.board_size, self.config.board_size))
+			new_random_action_batch = tf.reshape(new_random_action_batch, (self.num_unroll_steps, self.batch_size, 2, self.config.board_size, self.config.board_size))
+		else:
+			raise NotImplementedError(f'method {method}not implemented')
+		action_batch = new_action_batch
+		random_action_batch = new_random_action_batch
 		## Generate predictions
 		def loss_fn():
+			st=time.time()
 			output = self.model.initial_inference(
 				observation_batch
 			)#defined as time 0
 			hidden_state = output.hidden_state
 			value = output.value
-			reward = np.zeros_like(value)
+			reward = tf.zeros_like(value)
 			policy_logits = output.policy
 			predictions = [(value, reward, policy_logits)]
 			chances = []
+			timers[0] += time.time()-st
 			for i in range(self.num_unroll_steps):### start to check data processing here
-				action = np.concatenate([np.expand_dims(network.action_to_onehot(action, self.config.board_size, matrix = self.config.network_type == 'resnet'), axis = 0) for action in action_batch[:, i, 0]], axis = 0)
-				chance = self.model.chance([hidden_state, action])
+				st=time.time()
+				chance = self.model.chance([hidden_state, action_batch[i, :, :, :, :]])
+				timers[1] += time.time()-st
+				st=time.time()
 				chances.append(chance)
 				output = self.model.recurrent_inference(
-					hidden_state, action_batch[:, i, 0], action_batch[:, i, 1]
+					hidden_state, action_batch[i, :, :, :, :], random_action_batch[i, :, :, :, :], onehotted = True
 				)
+				timers[2] += time.time()-st
+				st=time.time()
 				reward = output.reward
 				hidden_state = output.hidden_state
 				hidden_state = scale_gradient(hidden_state, 0.5)
@@ -215,6 +242,7 @@ class Trainer:
 				# Scale the gradient at the start of the dynamics function (See paper appendix Training)
 				hidden_state = scale_gradient(hidden_state, 0.5)
 				predictions.append((value, reward, policy_logits))
+				timers[3] += time.time()-st
 			assert len(predictions) == self.num_unroll_steps+1, f'len(predictions):{len(predictions)}\nself.num_unroll_steps:{self.num_unroll_steps}'
 			#maybe there should be more assertion
 			
@@ -223,6 +251,7 @@ class Trainer:
 			# chances : num_unroll_steps, batch, chance_output*board_size**2
 			total_value_loss, total_reward_loss, total_chance_loss, total_policy_loss = [tf.zeros((self.batch_size)) for _ in range(4)]
 			# shape of losses: batch_size
+			st=time.time()
 			for i, prediction in enumerate(predictions):
 				value, reward, policy_logits = prediction
 				target_value = target_value_batch[:, i, :]
@@ -239,29 +268,34 @@ class Trainer:
 				if self.config.support:
 					pred_value_scalar = network.support_to_scalar(value, self.config.support, True)
 				else:
-					pred_value_scalar = np.reshape(value, (-1))
+					pred_value_scalar = tf.reshape(value, (-1))
 				if step.value == 0:
 					if i == 0:
-						index = np.random.choice(len(pred_value_scalar))
+						index = random.randint(0, self.batch_size-1)
 						last_value_initial_delta.set(pred_value_scalar[index]-target_value_scalar[index][i])
 						last_value_initial.set(pred_value_scalar[index])
 					elif i == 1:
-						index = np.random.choice(len(pred_value_scalar))
+						index = random.randint(0, self.batch_size-1)
 						last_value_recurrent_delta.set(pred_value_scalar[index]-target_value_scalar[index][i])
 						last_value_recurrent.set(pred_value_scalar[index])
-						index = np.random.choice(len(pred_value_scalar))
-						reward = np.expand_dims(reward[index], 0)
+						index = random.randint(0, self.batch_size-1)
+						reward = tf.expand_dims(reward[index], 0)
 						last_reward_delta.set(network.support_to_scalar(reward, self.config.support, True)[0].numpy()-target_reward_scalar[index][i])
 						last_reward.set(network.support_to_scalar(reward, self.config.support, True)[0].numpy())
-				priorities[:, i] = (
-					np.abs(pred_value_scalar - target_value_scalar[:, i])
-					** self.config.PER_alpha
-				)
+				if self.config.PER:
+					priorities[:, i] = (
+						np.abs(pred_value_scalar - target_value_scalar[:, i])
+						** self.config.PER_alpha
+					)
+			timers[4] += time.time()-st
+			st=time.time()
 			for i, chance in enumerate(chances):
 				chance = tf.reshape(chance, (self.batch_size, -1))
 				target_chance = target_chance_batch[:, i, :]
 				_, _, chance_loss = self.loss_function(None, None, chance, None, None, target_chance, False)
 				total_chance_loss += scale_gradient(chance_loss, 1.0/self.num_unroll_steps)
+			timers[5] += time.time()-st
+			st=time.time()
 			# Scale the value loss, paper recommends by 0.25 (See paper appendix Reanalyze)
 			if self.config.PER:
 				total_value_loss *= weight_batch
@@ -274,6 +308,8 @@ class Trainer:
 				# this is why value_loss*weight+reward_loss+policy_loss != total_loss
 				loss *= weight_batch'''
 
+			timers[6] += time.time()-st
+			st=time.time()
 			# (Deepmind's pseudocode do sum, and werner-duvaud/muzero-general do mean. Both are the same.)
 			loss = tf.math.reduce_mean(loss)#now loss is a scalar
 			l2_loss = tf.add_n([tf.nn.l2_loss(v) for v in self.model.trainable_variables])
@@ -285,6 +321,7 @@ class Trainer:
 				last_policy_loss.set(tf.math.reduce_mean(total_policy_loss).numpy())
 				last_l2_loss.set(l2_loss.numpy())
 				step.set(step.value+1)
+			timers[7] += time.time()-st
 			loss += l2_loss*self.l2_weight
 			return loss
 

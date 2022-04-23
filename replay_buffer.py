@@ -8,6 +8,7 @@ import tensorflow as tf
 import my_config
 import network
 import self_play
+import shared_storage
 
 
 class ReplayBuffer:
@@ -339,10 +340,10 @@ class Reanalyze:
 
 		self.num_reanalyzed_games = initial_checkpoint["num_reanalyzed_games"]
 
-	def reanalyze(self, replay_buffer, shared_storage):
-
-		for game_id, game_history in replay_buffer.buffer.items():
-
+	def reanalyze(self, replay_buffer:ReplayBuffer, shared_storage:shared_storage.SharedStorage):
+		#while self.num_reanalyzed_games/max(1,shared_storage.get_info('num_played_games'))<self.config.reanalyze_games_to_selfplay_games_ratio:
+		for _ in range(int(self.config.reanalyze_games_to_selfplay_games_ratio*shared_storage.get_info('num_played_games'))):
+			game_id,game_history,_1=replay_buffer.sample_game(force_uniform=True)
 			# Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
 			
 			observations = [

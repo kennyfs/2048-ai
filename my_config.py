@@ -96,8 +96,8 @@ class Config:
 		if not os.path.isdir(self.results_path):
 			os.mkdir(self.results_path)
 		
-		self.load_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v4", 'resnet')
-		self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v4", 'resnet')
+		self.load_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v5", 'resnet')
+		self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v5", 'resnet')
 		assert os.path.isdir(self.load_game_dir)
 		assert os.path.isdir(self.save_game_dir)
 		#self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v2", 'random')
@@ -114,7 +114,7 @@ class Config:
 		self.loss_weights = [1, 4, 4, 4]#See paper appendix H Reanalyze
 		#value reward chance policy
 		s = sum(self.loss_weights)
-		for i in range(3):
+		for i in range(4):
 			self.loss_weights[i] /= s
 		self.l2_weight = 1e-3 if self.optimizer == 'SGD' else 1e-4
 		self.training_steps_per_batch = 10
@@ -146,7 +146,7 @@ class Config:
 		self.training_steps_to_selfplay_steps_ratio = 1.0
 		#don't need to be very high(e.g. 1, 1.2)
 		#self.training_steps_to_selfplay_steps_ratio = float('inf')#observing training
-		self.reanalyze_games_to_selfplay_games_ratio = 0.1#ratio to control the number of reanalyze games each time
+		self.reanalyze_games_to_selfplay_games_ratio = 0.5#ratio to control the number of reanalyze games each time
 		#reanalyze all games, as it doesn't take much time.
 		self.test_games_to_selfplay_games_ratio = 0.1
 		self.num_selfplay_game_per_iteration = 1

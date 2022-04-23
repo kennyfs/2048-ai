@@ -233,7 +233,7 @@ class MuZero:
 				break
 			last_game_id += 1
 		#self.replay_buffer_worker.load_games(last_game_id-self.config.replay_buffer_size+1, last_game_id)
-		self.replay_buffer_worker.load_games(1, last_game_id)
+		self.replay_buffer_worker.load_games(max(1,last_game_id-self.config.replay_buffer_size), last_game_id)
 		info = self.replay_buffer_worker.get_info()
 		for k, v in info.items():
 			self.checkpoint[k] = v
@@ -258,6 +258,7 @@ class MuZero:
 				self.replay_buffer_worker, self.shared_storage_worker, 100, True
 			)
 			counter, training_counter = self.log_once(counter, training_counter, False)
+			self.reanalyze_worker.reanalyze(self.replay_buffer_worker, self.shared_storage_worker)
 	def play_random_games(self, render = False):
 		self.initialize_all_workers()
 		self.self_play_worker.play_random_games(self.replay_buffer_worker, self.shared_storage_worker, render = render)

@@ -275,8 +275,8 @@ class MCTS:
 				if last_node_random:
 					#last 2 nodes: o-x
 					#get hidden state from o, get action from choosing x
-					action_onehot = network.action_to_onehot(action, self.config.board_size, matrix = (self.config.network_type == 'resnet'))
-					self.predictor.manager.add_coroutine_list(self.predictor.chance(node.hidden_state, action_onehot))
+					action_onehot = network.action_to_onehot(action, self.config.board_size)
+					self.predictor.manager.add_coroutine_list(self.predictor.chance(node.hidden_state, action_onehot, onehotted = True))
 					chance = self.predictor.manager.run_coroutine_list(True)[0]
 
 					#chance is a np.array with shape 4+2*board_size**2
@@ -341,7 +341,7 @@ class MCTS:
 			if last_node_random:
 				#last 2 nodes: o-x
 				#get hidden state from o, get action from choosing x
-				action_onehot = network.action_to_onehot(action, self.config.board_size, matrix = (self.config.network_type == 'resnet'))
+				action_onehot = network.action_to_onehot(action, self.config.board_size)
 				chance = await self.predictor.get_outputs([node.hidden_state, action_onehot], 3)
 				#chance is a np.array with shape 4+2*board_size**2
 				random_node.expand(
@@ -422,8 +422,11 @@ class Node:
 			actions = list(range(actions))
 		self.reward = reward
 		self.hidden_state = hidden_state
-		policy = np.where(policy > threshold_for_policy, policy, 0)
-		policy /= np.sum(policy)
+		policy = policy.numpy().astype(np.float64)
+		#policy = np.where(policy > threshold_for_policy, policy, 0)
+		policy /= policy.sum()
+		if (policy.sum()-1.) > 1e-8:
+			print(f'sum:{np.sum(policy)}', policy)
 		for action in actions:
 			if policy[action] > 0:
 				self.children[action] = Node(policy[action], self.config, random = not self.random)
