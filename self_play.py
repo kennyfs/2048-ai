@@ -1,7 +1,7 @@
 import asyncio
 import collections
 import math
-import pickle
+import random
 
 import numpy as np
 import tensorflow as tf
@@ -123,7 +123,7 @@ class GameHistory:
 			F.write(f'{self.initial_add[1]}\n')
 			for action, reward, visits, value in zip(self.action_history, self.reward_history, self.child_visits, self.root_values):
 				F.write(f'{action} {reward} {visits} {value}\n')
-	def load(self, file, config, predictor = None, winer_takes_all = False):
+	def load(self, file, config, debug = False, predictor = None, winer_takes_all = False):
 		#about 60 times per second
 		env = environment.Environment(config)
 		with open(file, 'r') as F:
@@ -135,10 +135,13 @@ class GameHistory:
 				index = line.find(']', last_index)+1
 				actions = eval(line[last_index:index])
 				self.action_history.append(actions)
-				reward = env.step(actions[0])
-				env.step(actions[1])#very important
 				self.observation_history.append(env.get_features())
+				reward = env.step(actions[0])
 				self.chance_history.append(env.get_chance_features())
+				if debug:
+					env.render()
+					print(self.chance_history[-1])
+				env.step(actions[1])
 				last_index = index+1
 				index = line.find(' ', last_index)#[last_index, index) is reward
 				self.reward_history.append(reward)
@@ -217,8 +220,7 @@ class MCTS:
 		else:
 			#defaulted not to use previously searched nodes and create a new tree
 			root = Node(0, self.config, False)
-			self.predictor.manager.add_coroutine_list(self.predictor.initial_inference(observation))
-			output = self.predictor.manager.run_coroutine_list(True)[0]
+			output = self.predictor.initial_inference(observation)
 			root_predicted_value = output.value
 			reward = 0
 			policy_logits = output.policy
@@ -276,8 +278,7 @@ class MCTS:
 					#last 2 nodes: o-x
 					#get hidden state from o, get action from choosing x
 					action_onehot = network.action_to_onehot(action, self.config.board_size)
-					self.predictor.manager.add_coroutine_list(self.predictor.chance(node.hidden_state, action_onehot, onehotted = True))
-					chance = self.predictor.manager.run_coroutine_list(True)[0]
+					chance = self.predictor.chance(node.hidden_state, action_onehot, onehotted = True, debug = random.random() < 0.1)
 
 					#chance is a np.array with shape 4+2*board_size**2
 					random_node.expand(
@@ -291,12 +292,12 @@ class MCTS:
 
 				#last 3 nodes: o-x-o
 				#get hidden_state from the first o, get action from choosing x, get random action from choosing the second o
-				self.predictor.manager.add_coroutine_list(self.predictor.recurrent_inference(
+				output = self.predictor.recurrent_inference(
 					search_path[-3].hidden_state,
 					action,
 					random_action,
-				))
-				output = self.predictor.manager.run_coroutine_list(True)[0]
+					debug = random.random() < 0,
+				)
 				#generate policy, value, reward for the second o
 				#backpropagate value, set reward for the second o, set policy for the children(new x)
 				node.expand(

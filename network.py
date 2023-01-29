@@ -215,7 +215,7 @@ class AbstractNetwork(ABC):
 		#policy:batch, 4
 		#value:batch, 1 if not support, else batch, support*2+1
 		return NetworkOutput(policy = policy, value = value, reward = None, hidden_state = hidden_state)
-	def recurrent_inference(self, hidden_state, action_batch, random_action_batch, onehotted = True, matrix = True) -> NetworkOutput:
+	def recurrent_inference(self, hidden_state, action_batch, random_action_batch, onehotted, matrix = True) -> NetworkOutput:
 		'''
 		directly inference, for training
 		'''
@@ -323,13 +323,11 @@ class representation(tf.keras.Model):
 		for block in self.resblock:
 			out = block(out)
 		return out
-
 class dynamics(tf.keras.Model):
 	def __init__(self,
 		input_shape,
 		num_channels,
-		num_blocks_1,
-		num_blocks_2,
+		num_blocks,
 		reduced_channels_reward,
 		reward_layers,
 		support):
@@ -337,7 +335,7 @@ class dynamics(tf.keras.Model):
 		self.conv = conv3x3(num_channels)
 		self.bn = tf.keras.layers.BatchNormalization()
 		self.relu = tf.keras.layers.ReLU()
-		self.resblock_1 = [ResidualBlock(num_channels) for i in range(num_blocks_1)]
+		self.resblock_1 = [ResidualBlock(num_channels) for i in range(num_blocks)]
 		#self.resblock = [[conv3x3(num_channels, num_channels), tf.keras.layers.BatchNormalization(), conv3x3(num_channels, num_channels), tf.keras.layers.BatchNormalization()]for i in range(num_blocks)]
 		
 		self.conv_reward = conv1x1(reduced_channels_reward)
@@ -349,12 +347,11 @@ class dynamics(tf.keras.Model):
 		self.conv_2 = conv3x3(num_channels)
 		self.bn_2 = tf.keras.layers.BatchNormalization()
 
-		self.resblock_2 = [ResidualBlock(num_channels) for i in range(num_blocks_2)]
 		self.build(input_shape)
 
 	def call(self, x):
 		hidden_state, action, random_action = x
-		hidden_state_and_action = tf.keras.layers.concatenate([hidden_state, action], axis = 1)
+		hidden_state_and_action = tf.keras.layers.concatenate([hidden_state, action, random_action], axis = 1)
 		out = self.conv(hidden_state_and_action)
 		out = self.bn(out)
 		out = self.relu(out)
@@ -368,17 +365,8 @@ class dynamics(tf.keras.Model):
 		reward = self.relu(reward)
 		for layer in self.reward_output:
 			reward = layer(reward)
-
-		#try to resnet to output reward, as reward isn't related to the random action
-		#it may not work well(there are fewer layers before reward)
-		hidden_state = tf.keras.layers.concatenate([hidden_state, random_action], axis = 1)
-		hidden_state = self.conv_2(hidden_state)
-		hidden_state = self.bn_2(hidden_state)
-		hidden_state = self.relu(hidden_state)
-		for block in self.resblock_2:
-			hidden_state = block(hidden_state)
+		
 		return hidden_state, reward
-
 class chance(tf.keras.Model):
 	def __init__(self,
 		input_shape,
@@ -416,6 +404,10 @@ class prediction(tf.keras.Model):
 		super().__init__()
 		self.conv1x1_value = conv1x1(reduced_channels_value)
 		self.conv1x1_policy = conv1x1(reduced_channels_policy)
+		self.bn_value = tf.keras.layers.BatchNormalization()
+		self.bn_policy = tf.keras.layers.BatchNormalization()
+		self.relu = tf.keras.layers.ReLU()
+		self.relu = tf.keras.layers.ReLU()
 		self.flatten = tf.keras.layers.Flatten()
 		self.dense_value = [tf.keras.layers.Dense(size, activation = 'relu') for size in value_layers]+[tf.keras.layers.Dense(support*2+1)]
 		self.dense_policy = [tf.keras.layers.Dense(size, activation = 'relu') for size in policy_layers]+[tf.keras.layers.Dense(action_space_size)]
@@ -423,12 +415,16 @@ class prediction(tf.keras.Model):
 
 	def call(self, x):
 		out = self.conv1x1_policy(x)
+		out = self.bn_policy(out)
+		out = self.relu(out)
 		out = self.flatten(out)
 		for layer in self.dense_policy:
 			out = layer(out)
 		policy = out
 
 		out = self.conv1x1_value(x)
+		out = self.bn_value(out)
+		out = self.relu(out)
 		out = self.flatten(out)
 		for layer in self.dense_value:
 			out = layer(out)
@@ -446,8 +442,9 @@ class ResNetNetwork(AbstractNetwork):
 		self.dynamics_model = dynamics(
 			[[None, config.num_channels, config.board_size, config.board_size], [None, 4, config.board_size, config.board_size], [None, 2, config.board_size, config.board_size]], #hidden_state(num_channels) + action(4) + random_action(2)
 			config.num_channels,
-			config.num_blocks_dynamic_1-1,
-			config.num_blocks_dynamic_2-1,
+			#config.num_blocks_dynamic_1-1,
+			#config.num_blocks_dynamic_2-1,
+			config.num_blocks-1,
 			config.reduced_channels_reward,
 			config.reward_layers,
 			config.support, )
@@ -690,7 +687,7 @@ class Predictor:
 			return future.result()
 		else:
 			return await self.push_queue(inputs, network)
-	async def initial_inference(self, observation) -> NetworkOutput:
+	async def async_initial_inference(self, observation) -> NetworkOutput:
 		'''
 		input shape:
 			observation: whether flattened or not and without batchsize
@@ -700,7 +697,7 @@ class Predictor:
 		policy, value = await self.get_outputs(hidden_state, 2)
 		return NetworkOutput(reward = 0, hidden_state = hidden_state, value = value, policy = policy)
 
-	async def recurrent_inference(self, hidden_state:np.array, action:int, random_action:int, onehotted:bool=False, debug:bool=False) -> NetworkOutput:
+	async def async_recurrent_inference(self, hidden_state:np.array, action:int, random_action:int, onehotted:bool=False, debug:bool=False) -> NetworkOutput:
 		'''
 		input shape:
 			all be without batchsize
@@ -721,15 +718,53 @@ class Predictor:
 		policy, value = await self.get_outputs(new_hidden_state, 2)
 		
 		return NetworkOutput(reward = reward, hidden_state = new_hidden_state, value = value, policy = policy)
-	'''def run_coroutine_list(self):
-		return self.manager.run_coroutine_list()
-	def add_coroutine_list(self, toadd):
-		self.manager.add_coroutine_list(toadd)#if efficiency is too low, directly append to the list'''
-	async def chance(self, hidden_state:np.array, action:int, onehotted = False, debug:bool=False) -> np.array:
+	async def async_chance(self, hidden_state:np.array, action:int, onehotted = False, debug:bool=False) -> np.array:
 		if not onehotted:
 			assert isinstance(action, (int, np.int64, np.int32)), f'action:{action}, type:{type(action)}'
 			action = action_to_onehot(action, self.config.board_size)
 		chance = await self.get_outputs([hidden_state, action], 3)#hidden state is already scaled
 		if debug:
 			print(chance)
+		return chance
+	def initial_inference(self, observation) -> NetworkOutput:
+		'''
+		input shape:
+			observation: whether flattened or not and without batchsize
+			it will be flattened in tf.keras.layers.Flatten
+		'''
+		ret = self.manager.model.initial_inference(tf.expand_dims(observation, 0))
+		value = support_to_scalar(ret.value, self.config.support)[0]
+		return NetworkOutput(policy = ret.policy[0], value = value, hidden_state = ret.hidden_state[0], reward = None)
+	def recurrent_inference(self, hidden_state, action, random_action, onehotted = False, debug:bool=False) -> NetworkOutput:
+		'''
+		input shape:
+			all be without batchsize
+			hidden_state:(hidden_state_size(32))
+			action:(1) or ()
+			random_action:(1) or ()
+
+			for resnet
+			hidden_state:(num_channels, hidden_state_size_x, hidden_state_size_y)
+		'''
+		assert isinstance(action, (int, np.int64)), f'action:{action}, type:{type(action)}'
+		if not onehotted:
+			action = action_to_onehot(action, self.config.board_size)
+			random_action = random_action_to_onehot(random_action, self.config.board_size)
+		ret = self.manager.model.recurrent_inference(tf.expand_dims(hidden_state, 0), tf.expand_dims(action, 0), tf.expand_dims(random_action, 0), onehotted = True)
+		value = support_to_scalar(ret.value, self.config.support)[0]
+		reward = support_to_scalar(ret.reward, self.config.support)[0]
+		if debug:
+			print(f'reward:{ret.reward[0]}')
+		return NetworkOutput(policy = ret.policy[0], value = value, hidden_state = ret.hidden_state[0], reward = reward)
+	def chance(self, hidden_state, action, onehotted=False, debug:bool=False) -> np.array:
+		if not onehotted:
+			assert isinstance(action, (int, np.int64, np.int32)), f'action:{action}, type:{type(action)}'
+			action = action_to_onehot(action, self.config.board_size)
+		chance = self.manager.model.chance([tf.expand_dims(hidden_state, 0), tf.expand_dims(action, 0)])
+		chance = softmax_chance(chance)[0]
+		if debug:
+			p = np.reshape(np.copy(chance)[4: 4+self.config.board_size**2], (self.config.board_size, self.config.board_size))
+			p /= p.sum()
+			p *= 100
+			print(p)
 		return chance

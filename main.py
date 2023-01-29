@@ -133,7 +133,7 @@ class MuZero:
 		last_step = 0
 		while 1:
 			self.training_worker.run_update_weights(
-				self.replay_buffer_worker, self.shared_storage_worker, 100
+				self.replay_buffer_worker, self.shared_storage_worker, 50
 			)
 			counter, training_counter = self.log_once(counter, training_counter, False)
 			training_step = self.shared_storage_worker.get_info('training_step')
@@ -194,11 +194,15 @@ class MuZero:
 		self.replay_buffer_worker.load_games(1, last_game_id)
 		info = self.replay_buffer_worker.get_info()
 		self.shared_storage_worker.set_info(info)
+		self.shared_storage_worker.set_info('num_test_games', int(self.shared_storage_worker.get_info('num_played_games')/10))
 		# Launch workers
 		counter = 0
 		training_counter = self.shared_storage_worker.get_info('training_step')//self.config.training_steps_per_batch
-		#counter, training_counter = self.training_loop(counter, training_counter)
 		print('done training')
+		self.reanalyze_worker.reanalyze(
+			self.replay_buffer_worker, self.shared_storage_worker, reanalyze_all = True
+		)
+		counter, training_counter = self.training_loop(counter, training_counter)
 		try:
 			while 1:
 				self.self_play_worker.self_play(

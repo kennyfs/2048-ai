@@ -340,26 +340,48 @@ class Reanalyze:
 
 		self.num_reanalyzed_games = initial_checkpoint["num_reanalyzed_games"]
 
-	def reanalyze(self, replay_buffer:ReplayBuffer, shared_storage:shared_storage.SharedStorage):
+	def reanalyze(self, replay_buffer:ReplayBuffer, shared_storage:shared_storage.SharedStorage, reanalyze_all = False):
 		#while self.num_reanalyzed_games/max(1,shared_storage.get_info('num_played_games'))<self.config.reanalyze_games_to_selfplay_games_ratio:
-		for _ in range(int(self.config.reanalyze_games_to_selfplay_games_ratio*shared_storage.get_info('num_played_games'))):
-			game_id,game_history,_1=replay_buffer.sample_game(force_uniform=True)
-			# Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
-			
-			observations = [
-				game_history.get_observation(i)
-				for i in range(len(game_history.root_values))
-			]
-			observations = np.array(observations, dtype = np.float32)
-			values = self.model.initial_inference(observations).value
-			values = network.support_to_scalar(values, self.support, True)
-			values = values.numpy().tolist()
-			#It's important to use values.tolist() not list(values) due to efficiency problem.
-			game_history.reanalyzed_predicted_root_values = 	values
-			game_history.reanalyzed = True
+		if reanalyze_all:
+			for game_id,game_history in replay_buffer.buffer.items():
+				# Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
+				
+				observations = [
+					game_history.get_observation(i)
+					for i in range(len(game_history.root_values))
+				]
+				observations = np.array(observations, dtype = np.float32)
+				values = self.model.initial_inference(observations).value
+				values = network.support_to_scalar(values, self.support, True)
+				values = values.numpy().tolist()
+				#It's important to use values.tolist() not list(values) due to efficiency problem.
+				game_history.reanalyzed_predicted_root_values = 	values
+				game_history.reanalyzed = True
 
-			replay_buffer.update_game_history(game_id, game_history)
-			self.num_reanalyzed_games += 1
-			shared_storage.set_info(
-				"num_reanalyzed_games", self.num_reanalyzed_games
-			)
+				replay_buffer.update_game_history(game_id, game_history)
+				self.num_reanalyzed_games += 1
+				shared_storage.set_info(
+					"num_reanalyzed_games", self.num_reanalyzed_games
+				)
+		else:
+			for _ in range(int(self.config.reanalyze_games_to_selfplay_games_ratio*shared_storage.get_info('num_played_games'))):
+				game_id,game_history,_1=replay_buffer.sample_game(force_uniform=True)
+				# Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
+				
+				observations = [
+					game_history.get_observation(i)
+					for i in range(len(game_history.root_values))
+				]
+				observations = np.array(observations, dtype = np.float32)
+				values = self.model.initial_inference(observations).value
+				values = network.support_to_scalar(values, self.support, True)
+				values = values.numpy().tolist()
+				#It's important to use values.tolist() not list(values) due to efficiency problem.
+				game_history.reanalyzed_predicted_root_values = 	values
+				game_history.reanalyzed = True
+				
+				replay_buffer.update_game_history(game_id, game_history)
+				self.num_reanalyzed_games += 1
+				shared_storage.set_info(
+					"num_reanalyzed_games", self.num_reanalyzed_games
+				)
