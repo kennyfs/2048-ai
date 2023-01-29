@@ -2,23 +2,22 @@
 試圖用Muzero的方法訓練一個2048的模型。  
 參考來源:[別人的完整實作](https://github.com/werner-duvaud/muzero-general)、[Deep Mind 官方虛擬碼(偽代碼)](https://arxiv.org/src/1911.08265v2/anc/pseudocode.py)、[陽明交大論文](https://hdl.handle.net/11296/amnm56)
 ## 進度  
-（待補）
-## todo  
-- [ ] 調整訓練參數讓輸出更理想  
-- [ ] 運用多線程增進selfplay效率(似乎有點難)  
-- [X] 隨機產生遊戲
-- [X] 修[bug](#Bugs)，目前沒什麼bug
-- [ ] log更多資訊（如：隨機取樣輸出、lr）
+一開始的想法（bf33080以前）：  
+把action分成兩個type，加入磚塊和移動，並且在game history都紀錄，在dynamics network中也是把兩種action視為一樣的一起做。
+  
+後來覺得隨機的action在搜尋時會很大程度的限制搜尋深度，嘗試把兩種action合併看待，只給神經網路移動的action，因為隨機的改變他應該也能學到，但後來發現[陽明交大論文](https://hdl.handle.net/11296/amnm56)，新增chance網路確實有必要。  
+  
+5a47818時發現optimizer影響很大，SGD就是始終無法fit，調高學習率反而會讓loss無法下降，Adam真的好用很多，不過反而要注意過擬和。  
+  
+**目前要打算大幅度重寫，比較不在意搜尋深度和訓練效率（不要硬是批次處理，簡化程式）**  
+**未來規劃是先想好架構、把要做的事列出來再做**  
+## todo
 ## 理解
 1. value target: bootstrap---value is expectant reward, so expectant score=value+reward in past
 ## 提醒自己
 network.Network及他的subclass輸出的hidden state都是scale過的，在Predictor、Manager、AbstractNetwork中都可以忽略scale hidden state
 ## 想法
-shared storage中儲存網路不一定要和其他資訊一起儲存  
-非必要不要用ray，因為ray似乎無法把有asyncio的東西當作函數的參數（無法pickle），畢竟我就只有一個GPU，讓inference排隊，一起預測才比較重要  
-  
-replay buffer、shared storage必須同時用ray或不用ray，否則如果replay buffer用ray、shared storage是普通型態的參數，replay buffer會copy一份shared storage，無法正確修改。  
-解決辦法：replay buffer不要管shared storage中的資訊，要用的時候(結束完selfplay更新)
+參考[Katago](https://github.com/lightvector/KataGo)的架構
 ## Bugs
 ### bug1
 偶爾一局遊戲結束時會停住，不知道發生什麼問題，然後很久很久之後出現這樣的錯誤訊息：  
