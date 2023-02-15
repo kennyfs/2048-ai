@@ -5,7 +5,6 @@ import random
 
 import numpy as np
 import tensorflow as tf
-import my_config
 
 def scale_hidden_state(to_scale_hidden_state:np.array):
 	'''

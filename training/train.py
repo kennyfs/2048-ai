@@ -5,8 +5,8 @@ import time
 import numpy as np
 import tensorflow as tf
 
-import network
-import my_config
+import neuralnet.model as model
+import configs.my_config as my_config
 def scale_gradient(tensor, scale):
 	"""Scales the gradient for the backward pass."""
 	return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
@@ -17,7 +17,7 @@ class Trainer:
 	in the shared storage.
 	"""
 
-	def __init__(self, initial_checkpoint, model:network.Network, config:my_config.Config):
+	def __init__(self, initial_checkpoint, model:model.Network, config:my_config.Config):
 		self.config = config
 		self.model=model
 		'''
@@ -144,8 +144,8 @@ class Trainer:
 		# target_reward_batch: batch, num_unroll_steps+1
 		# target_policy_batch: batch, num_unroll_steps+1, action_space_size
 		if self.config.support:
-			target_value_batch = network.scalar_to_support(target_value_batch, self.config.support)
-			target_reward_batch = network.scalar_to_support(target_reward_batch, self.config.support)
+			target_value_batch = model.scalar_to_support(target_value_batch, self.config.support)
+			target_reward_batch = model.scalar_to_support(target_reward_batch, self.config.support)
 		else:
 			target_value_batch=np.expand_dims(target_value_batch,axis=-1)
 			target_reward_batch=np.expand_dims(target_reward_batch,axis=-1)
@@ -223,7 +223,7 @@ class Trainer:
 					total_reward_loss+=scale_gradient(reward_loss, 1.0/(self.num_unroll_steps-1))
 					total_policy_loss+=scale_gradient(policy_loss, 1.0/(self.num_unroll_steps-1))
 				if self.config.support:
-					pred_value_scalar = network.support_to_scalar(value, self.config.support, True)
+					pred_value_scalar = model.support_to_scalar(value, self.config.support, True)
 				else:
 					pred_value_scalar = np.reshape(value,(-1))
 				if step.value==0:
@@ -237,8 +237,8 @@ class Trainer:
 						last_value_recurrent.set(pred_value_scalar[index])
 						index=np.random.choice(len(pred_value_scalar))
 						reward=np.expand_dims(reward[index],0)
-						last_reward_delta.set(network.support_to_scalar(reward, self.config.support, True)[0].numpy()-target_reward_scalar[index][i])
-						last_reward.set(network.support_to_scalar(reward, self.config.support, True)[0].numpy())
+						last_reward_delta.set(model.support_to_scalar(reward, self.config.support, True)[0].numpy()-target_reward_scalar[index][i])
+						last_reward.set(model.support_to_scalar(reward, self.config.support, True)[0].numpy())
 				priorities[:, i] = (
 					np.abs(pred_value_scalar - target_value_scalar[:, i])
 					** self.config.PER_alpha

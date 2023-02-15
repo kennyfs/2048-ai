@@ -5,9 +5,8 @@ import random
 import numpy as np
 import tensorflow as tf
 
-import my_config
-import network
-import self_play
+import neuralnet.model as model
+import command.selfplay as selfplay
 
 
 class ReplayBuffer:
@@ -15,7 +14,7 @@ class ReplayBuffer:
 	Class which run in a dedicated thread to store played games and generate batch.
 	"""
 
-	def __init__(self, initial_checkpoint, initial_buffer, config:my_config.Config):
+	def __init__(self, initial_checkpoint, initial_buffer, config):
 		self.config = config
 		self.buffer = copy.deepcopy(initial_buffer)
 		self.num_played_games = initial_checkpoint["num_played_games"]
@@ -67,7 +66,7 @@ class ReplayBuffer:
 		return {"num_played_games":self.num_played_games,"num_played_steps":self.num_played_steps}
 	def load_games(self, first_game_id, last_game_id):
 		for i in range(first_game_id, last_game_id+1):
-			game_history=self_play.GameHistory()
+			game_history=selfplay.GameHistory()
 			game_history.load(os.path.join(self.config.load_game_dir,f'{i}.record'),self.config)
 			self.save_game(game_history, save_to_file=False)
 		print(f'initialize with {last_game_id-first_game_id+1} games.')
@@ -234,7 +233,7 @@ class ReplayBuffer:
 					self.buffer[game_id].priorities
 				)
 
-	def compute_target_value(self, game_history:self_play.GameHistory, index):
+	def compute_target_value(self, game_history:selfplay.GameHistory, index):
 		# The value target is the discounted root value of the search tree td_steps into the
 		# future, plus the discounted sum of all rewards until then.
 		bootstrap_index = index + self.config.td_steps
@@ -313,7 +312,7 @@ class Reanalyze:
 	See paper appendix Reanalyze.
 	"""
 
-	def __init__(self, initial_checkpoint, model:network.Network, config:my_config.Config):
+	def __init__(self, initial_checkpoint, model:model.Network, config:my_config.Config):
 		self.config = config
 		self.support = config.support
 		# Fix random generator seed
@@ -337,7 +336,7 @@ class Reanalyze:
 			]
 			observations=np.array(observations,dtype=np.float32)
 			values = self.model.initial_inference(observations).value
-			values = network.support_to_scalar(values, self.support, True)
+			values = model.support_to_scalar(values, self.support, True)
 			values = values.numpy().tolist()
 			#It's important to use values.tolist() not list(values) due to efficiency problem.
 			game_history.reanalyzed_predicted_root_values =	values

@@ -1,3 +1,4 @@
+import argparse
 import glob
 import os
 import pickle
@@ -5,30 +6,28 @@ import random
 import sys
 
 import numpy as np
-import tensorflow as tf
 
-import environment
-import my_config
-import network
-import replay_buffer
-import self_play
-import shared_storage
-import trainer
+from program import setup
 
+'''
+from command import selfplay
+from dataio import replaybuffer, sharedstorage
+from game import environment
+from neuralnet import model
+from training import train
+'''
 bg   ="\x1b[48;5;"
 word ="\x1b[38;5;"
 end  ="m"
 reset="\x1b[0m"
+__version__ = "0.1.0"
 '''
 assumption:
 total training steps=1e5 or less
 '''
-def model_get(config):
-	tmp_model=network.Network(config)
-	return tmp_model.get_weights(),tmp_model.summary()
-class MuZero:
-	"""
-	Main class to manage MuZero.
+"""
+class Main:
+	Main class to manage all things.
 
 	Args:
 
@@ -40,7 +39,6 @@ class MuZero:
 		>>> muzero = MuZero("cartpole")
 		>>> muzero.train()
 		>>> muzero.test(render=True)
-	"""
 
 	def __init__(self, config=None):
 		# Load the game 
@@ -155,12 +153,12 @@ class MuZero:
 			self.reanalyze_worker = replay_buffer.Reanalyze(self.checkpoint, self.model, self.config)
 		self.self_play_worker = self_play.SelfPlay(self.predictor, self.Game, self.config)
 	def self_play_and_train(self, log_in_tensorboard=True, render:bool=True):
-		"""
+		'''
 		Spawn ray workers and launch the training.
 
 		Args:
 			log_in_tensorboard (bool): Start a testing worker and log its performance in TensorBoard.
-		"""
+		'''
 		if log_in_tensorboard or self.config.save_model:
 			os.makedirs(self.config.results_path, exist_ok=True)
 		print(
@@ -263,9 +261,9 @@ class MuZero:
 		self.self_play_worker.play_random_games(self.replay_buffer_worker, self.shared_storage_worker, render=render)
 
 	def log_once(self, counter, training_counter, test_game=True):
-		"""
+		'''
 		Keep track of the training performance.
-		"""
+		'''
 		# Play a test game each time it logs.
 		if test_game:
 			self.test_worker = self_play.SelfPlay(
@@ -415,9 +413,9 @@ class MuZero:
 			counter += 1
 		return counter, training_counter
 	def terminate(self):
-		"""
+		'''
 		Softly terminate the running tasks and garbage collect the workers.
-		"""
+		'''
 
 		print("\n\nPersisting replay buffer games to disk...")
 		replay_buffer = self.replay_buffer_worker.get_buffer()
@@ -435,14 +433,14 @@ class MuZero:
 		print('done saving')
 
 	def load_model(self, checkpoint_path=None, replay_buffer_path=None, model_path=None):
-		"""
+		'''
 		Load a model and/or a saved replay buffer.
 
 		Args:
 			checkpoint_path (str): Path to model-{training_step}.pkl.
 
 			replay_buffer_path (str): Path to replay_buffer-{training_step}.pkl
-		"""
+		'''
 		# Load checkpoint
 		if checkpoint_path:
 			if os.path.exists(checkpoint_path):
@@ -511,58 +509,23 @@ class MuZero:
 		self.load_model(
 			checkpoint_path=checkpoint_path, replay_buffer_path=replay_buffer_path, model_path=model_path,
 		)
-
-if __name__ == "__main__":
-	if len(sys.argv) > 2 and sys.argv[2] in ('start','train'):
-		# Train directly with "python muzero.py cartpole"
-		muzero = MuZero()
-		muzero.train()
-	else:
-		# Let user pick a game
-		
-		muzero = MuZero()
-
-		while True:
-			# Configure running options
-			options = [
-				"Selfplay and Train",
-				"Train only",
-				"Load pretrained model",
-				"Generate random games",
-				"Test the game manually",
-				"Exit",
-			]
-			print()
-			for i in range(len(options)):
-				print(f"{i}. {options[i]}")
-
-			choice = input("Enter a number to choose an action: ")
-			valid_inputs = [str(i) for i in range(len(options))]
-			while choice not in valid_inputs:
-				choice = input("Invalid input, enter a number listed above: ")
-			choice = int(choice)
-			if choice == 0:
-				muzero.self_play_and_train(render=True)
-			elif choice == 1:
-				res=input('train from scratch? (y/n)').strip().lower()
-				while res not in ('y','n'):
-					res=input('invalid input, enter y or n: ').strip().lower()
-				muzero.train_only(res.lower()=='y')
-			elif choice == 2:
-				muzero.load_model_menu()
-			elif choice == 3:
-				muzero.play_random_games(render=False)
-			elif choice == 4:
-				env = muzero.Game()
-				env.reset()
-				env.render()
-
-				done = False
-				while not done:
-					action = env.human_to_action()
-					reward = env.step(action)
-					print(f"\nAction: {environment.action_to_string(action)}\nReward: {reward}")
-					env.render()
-			else:
-				break
-			print("\nDone")
+"""
+def train(cfg):
+	pass
+def test(cfg):
+	pass
+if __name__ == '__main__':
+	
+	parser = argparse.ArgumentParser()
+	parser.add_argument('mode', choices=['train', 'test'] ,help='mode')
+	parser.add_argument('-c', '--config', help='Config file to use', required=True)
+	parser.add_argument('-v', '--version', action='version', help='Displays version information and exits.', version='%(prog)s {version}'.format(version=__version__))
+	
+	args = parser.parse_args()
+	cfg = setup.ConfigParser(args.config)
+	if args.mode == 'train':
+		# Train
+		train(cfg)
+	elif args.mode == 'test':
+		# Test
+		test(cfg)

@@ -1,7 +1,8 @@
-import numpy as np
-import os
-import datetime
+from pathlib import Path
 
+import numpy as np
+
+'''
 def default_visit_softmax_temperature(num_moves=0,training_steps=0):
 	if training_steps < 50e3:
 		return 0.5
@@ -87,15 +88,15 @@ class Config:
 		self.reward_layers=[128]
 		
 		### Training
-		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results", datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))
+		self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'results', datetime.datetime.now().strftime('%Y-%m-%d--%H-%M-%S'))
 		if not os.path.isdir(self.results_path):
 			os.mkdir(self.results_path)
 		
-		self.load_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v4", 'resnet')
-		self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v4", 'resnet')
+		self.load_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'saved_games v4', 'resnet')
+		self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'saved_games v4', 'resnet')
 		assert os.path.isdir(self.load_game_dir)
 		assert os.path.isdir(self.save_game_dir)
-		#self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved_games v2", 'random')
+		#self.save_game_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'saved_games v2', 'random')
 		#change dir if you want
 		#haven't change game loading path in replay_buffer.py
 		self.training_steps=int(100e3)
@@ -172,3 +173,85 @@ def default_config():
 		lr_init=8e-4,#1e-3
 		lr_decay_steps=40e3,
 		visit_softmax_temperature_fn=default_visit_softmax_temperature)
+'''
+class ConfigParser:
+	def __init__(self, file = None, string_ = None):
+		self.keyValues = {}
+		def readline(line):
+			line = line.strip()
+			if line[0]=='#':
+				return
+			key,value = line.split('=')
+			key = key.strip()
+			value = value.strip()
+			self.keyValues[key] = value
+		if file is not None:
+			with open(file, 'r') as f:
+				for line in f.readlines():
+					readline(line)
+		if string_ is not None:
+			for line in string_.split('\n'):
+				readline(line)
+
+	def getBool(self, key, default = None):
+		if key in self.keyValues:
+			if self.keyValues[key].lower() in ['true', '1', 'yes']:
+				return True
+			elif self.keyValues[key].lower() in ['false', '0', 'no']:
+				return False
+			raise ValueError('Invalid value for boolean: ' + self.keyValues[key])
+		if default is not None:
+			assert isinstance(default, bool)
+			return default
+		raise ValueError(f'Missing value for boolean:{key}, and default is not set.')
+
+	def getInt(self, key, default = None):
+		if key in self.keyValues:
+			try:
+				return int(self.keyValues[key])
+			except ValueError:
+				raise ValueError(f'Invalid value for int, key = {key}, value = {self.keyValues[key]}')
+		if default is not None:
+			assert isinstance(default, int)
+			return default
+		raise ValueError(f'Missing value for int:{key}, and default is not set.')
+
+	def getFloat(self, key, default = None):
+		if key in self.keyValues:
+			try:
+				return float(self.keyValues[key])
+			except ValueError:
+				raise ValueError(f'Invalid value for float, key = {key}, value = {self.keyValues[key]}')
+		if default is not None:
+			assert isinstance(default, float)
+			return default
+		raise ValueError(f'Missing value for float:{key}, and default is not set.')
+	
+	def getString(self, key, default = None):
+		if key in self.keyValues:
+			return self.keyValues[key]
+		if default is not None:
+			assert isinstance(default, str)
+			return default
+		raise ValueError(f'Missing value for string:{key}, and default is not set.')
+
+	def getPath(self, key, default = None):
+		if key in self.keyValues:
+			return Path(self.keyValues[key])
+		if default is not None:
+			if isinstance(default, str):
+				return Path(default)
+			elif isinstance(default, Path):
+				return default
+			raise ValueError(f'Invalid default value for path, key = {key}, default = {default}')
+		raise ValueError(f'Missing value for path:{key}, and default is not set.')
+	
+	def getOtherPythonEvalable(self, key, default = None):
+		'''
+		Note: if default is used, it won't get through eval.
+		'''
+		if key in self.keyValues:
+			return eval(self.keyValues[key])
+		if default is not None:
+			return default
+		raise ValueError(f'Missing value for {key}, and default is not set.')

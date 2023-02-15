@@ -1,5 +1,5 @@
 # 2048-ai  
-試圖用Muzero的方法訓練一個2048的模型。  
+改成試圖用類似AlphaZero的方法訓練一個2048的模型，因為Muzero的方法似乎並沒有必要。  
 參考來源:[別人的完整實作](https://github.com/werner-duvaud/muzero-general)、[Deep Mind 官方虛擬碼(偽代碼)](https://arxiv.org/src/1911.08265v2/anc/pseudocode.py)、[陽明交大論文](https://hdl.handle.net/11296/amnm56)
 ## 進度  
 一開始的想法（bf33080以前）：  
@@ -11,6 +11,8 @@
   
 **目前要打算大幅度重寫，比較不在意搜尋深度和訓練效率（不要硬是批次處理，簡化程式）**  
 **未來規劃是先想好架構、把要做的事列出來再做**  
+我覺得可以放棄MCTS時用多線程搜尋，因為多個線程存取同一棵樹會牽扯到很多麻煩的問題。  
+因此可以一次使用多個MCTS，但共用一個神經網路，這樣可以加快推論速度。就像KataGo一樣。  
 ## todo
 ## 理解
 1. value target: bootstrap---value is expectant reward, so expectant score=value+reward in past
