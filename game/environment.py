@@ -33,10 +33,10 @@ class Board:
 		seed must be set
 		'''
 		self.cfg = cfg
-		self.boardSize = cfg.getint('boardSize', -1)
+		self.boardSize = cfg.getInt('boardSize', -1)
 		if self.boardSize == -1:
-			self.xSize = cfg.getint('xSize')
-			self.ySize = cfg.getint('ySize')
+			self.xSize = cfg.getInt('xSize')
+			self.ySize = cfg.getInt('ySize')
 		else:
 			self.xSize = self.boardSize
 			self.ySize = self.boardSize
@@ -48,9 +48,10 @@ class Board:
 			self.score = score
 		else:
 			self.score = 0
-		# score is only changed in self.step, directly doing self.add should not change it.
+		
 		if seed == None:
 			seed = random.randrange(sys.maxsize)
+			#### todo: log seed
 		self.rand = random.Random(seed)
 
 	def reset(self):
@@ -190,7 +191,29 @@ class Board:
 				for j in range(self.ySize):
 					self.grid[i][j] = res[j]
 		else:
-			x, y, num = self.add_action_to_pos(action)
+			x, y, num = self.addActionToPos(action)
+			self.grid[x][y] = num
+		return self.score - beforescore
+	
+	def stepMaybeFaster(self, action) -> int:
+		'''
+		return value: instant reward
+		'''
+		beforescore = self.score
+		if action == 0:
+			for i in range(self.ySize):
+				self.moveALineMaybeFaster(0, i, False)
+		elif action == 1:
+			for i in range(self.ySize):
+				self.moveALineMaybeFaster(0, i, True)
+		elif action == 2:
+			for i in range(self.xSize):
+				self.moveALineMaybeFaster(1, i, False)
+		elif action == 3:
+			for i in range(self.xSize):
+				self.moveALineMaybeFaster(1, i, True)
+		else:
+			x, y, num = self.addActionToPos(action)
 			self.grid[x][y] = num
 		return self.score - beforescore
 	def render(self):
@@ -248,6 +271,19 @@ class Board:
 		return action
 	def actionSpacePlay(self):
 		return list(range(4))
+
+	def addActionToPos(self, action:int):
+		'''
+		return value:
+			x, y, num(1 or 2)
+		'''
+		assert 4 <= action and action<4+2*self.xSize*self.ySize
+		action -= 4
+		num = action//(self.xSize*self.ySize) + 1
+		if action > self.xSize*self.ySize:
+			action -= self.xSize*self.ySize
+		return action//self.ySize, action%self.ySize, num
+	
 	def __str__(self):
 		result = ''
 		for i in self.grid:
@@ -259,6 +295,7 @@ class Board:
 				result += '|'
 			result += '\n'
 			result += '-' * 4 * self.ySize
+			result += '\n'
 		result += f'score = {self.score}'
 		return result
 #####
@@ -275,13 +312,3 @@ def action_to_type(action,board_size):
 	if action<4:
 		return 0
 	return 1
-def add_action_to_pos(Action:int,board_size):
-	'''
-	return type:
-		x,y,num(1 or 2)
-	'''
-	assert 4 <= Action and Action<4+2*board_size**2
-	Action -= 4
-	num = Action//(board_size**2)
-	Action %= board_size**2
-	return Action//board_size,Action%board_size,num+1

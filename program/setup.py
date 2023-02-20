@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import numpy as np
-
 '''
 def default_visit_softmax_temperature(num_moves=0,training_steps=0):
 	if training_steps < 50e3:
@@ -175,7 +173,7 @@ def default_config():
 		visit_softmax_temperature_fn=default_visit_softmax_temperature)
 '''
 class ConfigParser:
-	def __init__(self, file = None, string_ = None):
+	def __init__(self, file = None, string_ = None, dict_ = None):
 		self.keyValues = {}
 		def readline(line):
 			line = line.strip()
@@ -189,10 +187,14 @@ class ConfigParser:
 			with open(file, 'r') as f:
 				for line in f.readlines():
 					readline(line)
-		if string_ is not None:
+		elif string_ is not None:
 			for line in string_.split('\n'):
 				readline(line)
-
+		elif dict_ is not None:
+			self.keyValues = dict_
+		else:
+			raise BaseException('ConfigParser get no input')
+		
 	def getBool(self, key, default = None):
 		if key in self.keyValues:
 			if self.keyValues[key].lower() in ['true', '1', 'yes']:
