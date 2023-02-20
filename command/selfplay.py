@@ -1,9 +1,13 @@
 import asyncio
 import collections
+from copy import copy
 import math
 import pickle
+import random
+import sys
 
 import numpy as np
+from dataio.trainingwrite import GameData
 import tensorflow as tf
 
 import game.environment as environment
@@ -189,101 +193,92 @@ class SelfPlay:
 
 	def __init__(self, nnEval, Game:type, cfg):
 		self.cfg = cfg
-		self.addExplorationNoise = cfg.getBool('addExplorationNoise')
 
+		numSimulations = cfg.getInt('numSimulations')
+		pbCBase = cfg.getFloat('pbCBase')
+		pbCInit = cfg.getFloat('pbCInit')
+		addExplorationNoise = cfg.getBool('addExplorationNoise')
+		dirichletAlpha = cfg.getFloat('dirichletAlpha')
+		explorationFraction = cfg.getFloat('explorationFraction')
+		discount = cfg.getFloat('discount')
+		self.searchParams = SearchParams(numSimulations, pbCBase, pbCInit, addExplorationNoise, dirichletAlpha, explorationFraction, discount)
+		self.seed = cfg.getString('searchSeed')
+		if self.seed == None:
+			self.seed = random.randrange(sys.maxsize)
+			#### to do: log seed
+		self.numSelfplayGamePerIteration = cfg.getInt('numSelfplayGamePerIteration')
+		self.useNHWC = cfg.getBool('useNHWC')
 		self.Game = Game
 
 		self.nnEval = nnEval
 
-	def selfPlay(self, replayBuffer, sharedStorage, testMode:bool=False, render:bool=False):
+	async def selfPlay(self, replayBuffer, sharedStorage, gameIdStart:int, render:bool=False):
 		totalGames = 0
-		while totalGames < self.config.num_selfplay_game_per_iteration:
-			#self.predictor.manager.set_weights(shared_storage.get_info("weights"))
+		for _ in range(self.numSelfplayGamePerIteration):
 
-			print('flag self_play1')
-			game_history=self.play_game(
-				self.config.visit_softmax_temperature_fn(
-					training_steps=shared_storage.get_info("training_step")
-				),
-				render,### if you want to render, change main.py
+			gameData=self.playGame(
+				self.cfg.temperatureFunction(
+					trainingSteps=sharedStorage.getInfo("training step")
+				)
 			)
-			print('flag self_play2')
-			replay_buffer.save_game(game_history)#error seems to be here
-			print('flag self_play3')
-			totalGames+=1
+			replayBuffer.saveGame(gameData)
 	
-	def play_game(self, temperature, render:bool):#for this single game, seed should be self.seed+game_id
-		"""
-		Play one game with actions based on the Monte Carlo tree search at each moves.
-		"""
-		game_history = GameHistory()
-		# start a whole new game
-		game=self.Game(self.config)
+	async def playGame(self, temperature:float, render:bool):#for this single game, seed should be self.seed+game_id
+
+		gameData = GameData()
+		game = self.Game()
 		game.reset()
 		#initial position
 		#training target can be started at a time where the next move is adding move, so keep all observation history
 
 		for _ in range(2):
-			action=game.add()
-			game_history.addtile(action)
+			action = game.add()
+		gameData.observationHistory.append(copy(game.grid))
 		done = False
 
 		if render:
 			print('A new game just started.')
+			#### todo: change to logging
 			game.render()
-		while not done and len(game_history.action_history) <= self.config.max_moves:
-			observation=game.get_features()
-			print('flag play_game1')
-			assert (
-				len(np.array(observation).shape) == 3
-			), f"Observation should be 3 dimensionnal instead of {len(np.array(observation).shape)} dimensionnal. Got observation of shape: {np.array(observation).shape}"
-			assert (
-				list(observation.shape) == self.config.observation_shape
-			), f"Observation should match the observation_shape defined in MuZeroConfig. Expected {self.config.observation_shape} but got {np.array(observation).shape}."
-			'''#This will only be useful if 
-			stacked_observations = game_history.get_stacked_observations(
-				-1,
-				self.config.stacked_observations,
-			)
-			'''
+		search = Search(game, self.nnEval, self.useNHWC, self.searchParams)
+
+		while not done and len(gameData.actionHistory) <= self.cfg.getInt('maxMoves', 1e10):
+
+			
 			# Choose the action
-			legal_actions=game.legal_actions()
-			root = MCTS(self.config, self.predictor).run(
-				observation,
-				legal_actions,
-				True,
-			)
-			action = self.select_action(
+			legalActions = game.legalActions()
+			root = await search.runWholeSearch()
+			action = self.selectAction(
 				root,
 				temperature,
 			)
 
 			if render:
-				#print(f'Tree depth: {mcts_info["max_tree_depth"]}')
 				print(
 					f"Root value : {root.value():.2f}"
 				)
 				print(f'visits:{[int(root.children[i].visits/self.config.num_simulations*100) if i in root.children else 0 for i in range(4)]}')
+				#### todo: change to logging
 			reward = game.step(action)
 			if render:
-				print(f"Played action: {environment.action_to_string(action,self.config.board_size)}")
+				print(f"Played action: {environment.actionToString(action,self.config.board_size)}")
 
-			game_history.store_search_statistics(root, self.config.action_space_type0)
+			gameData.store_search_statistics(root, self.config.action_space_type0)
 
 
 			#add a tile
 			addaction=game.add()
-			game_history.add([action,addaction],observation,reward)
+			gameData.add([action,addaction],observation,reward)
 			if render:
 				game.render()
 			
 			done=game.finish()
-			print(f'game length:{len(game_history.root_values)}')
-			print('flag play_game2')
-		print('flag play_game3')
-		return game_history
+			print(f'game length:{len(gameData.root_values)}')
+			print('flag playGame2')
+		print('flag playGame3')
+		return gameData
 
-	def select_action(self, node, temperature):
+	def selectAction(self, node, temperature):
 		"""
 		Select action according to the visit count distribution and the temperature.
 		The temperature is changed dynamically with the visit_softmax_temperature function
@@ -312,26 +307,26 @@ class SelfPlay:
 		Play a game with a random policy.
 		"""
 		for game_id in range(self.config.num_random_games_per_iteration):
-			game_history = GameHistory()
+			gameHistory = GameHistory()
 			game = self.Game(self.config)
 			game.reset()
 			done = False
 			for _ in range(2):
 				action=game.add()
-				game_history.addtile(action)
-			while not done and len(game_history.action_history) <= self.config.max_moves:
+				gameHistory.addtile(action)
+			while not done and len(gameHistory.action_history) <= self.config.max_moves:
 				action = np.random.choice(game.legal_actions())
 				observation=game.get_features()
 				reward = game.step(action)
 				addaction=game.add()
-				game_history.add([action,addaction],observation,reward)
-				game_history.store_search_statistics(None, self.config.action_space_type0)
+				gameHistory.add([action,addaction],observation,reward)
+				gameHistory.store_search_statistics(None, self.config.action_space_type0)
 				done = game.finish()
 				if render:
 					game.render()
 			if game_id%50==0:
 				print(f'ratio:{game_id/self.config.num_random_games_per_iteration}')
-			replay_buffer.save_game(game_history)
+			replay_buffer.save_game(gameHistory)
 #show a game(for debugging)
 if __name__=='__main__':
 	net=model.Network()

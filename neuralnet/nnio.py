@@ -9,7 +9,7 @@ class NNInput:
 		# None means that a symmetry will be chosen randomly by "NNEval",
 		# so when running multiple search threads or workers,
 		# the symmetries may not be the same due to the different order in which the inputs are received.
-	def fillV1(self, board:environment.Environment, useNHWC:bool):
+	def fillV1(self, useNHWC:bool, board:environment.Environment=None, grid=None):
 		'''
 		V1 only contains the current tiles, no history and no type info.
 		Adding history might be an improvement.
@@ -22,9 +22,14 @@ class NNInput:
 
 		if not useNHWC, use NCHW
 		'''
-		grid = np.array(board.grid)
+		if board is not None:
+			grid = board.grid
+		else:
+			assert grid is not None
+		grid = np.array(grid)
+		xSize, ySize = grid.shape
 		result = []
-		for i in range(1, board.xSize * board.ySize + 2):# 2^(x*y+1) is the max possible tile.
+		for i in range(1, xSize * ySize + 2):# 2^(x*y+1) is the max possible tile.
 			result.append(np.where(grid == i, 1.0, 0.0))
 		out = np.array(result, dtype = np.float32)
 		if useNHWC:# CHW to HWC

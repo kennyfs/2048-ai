@@ -1,5 +1,6 @@
 import copy
 import random
+import sys
 
 
 class OutputHelper:
@@ -27,15 +28,15 @@ class OutputHelper:
 	#starting from 4:put a tile, [4,4+self.board_size**2) for putting a 2, [4+self.board_size**2,4+2*self.board_size**2) for putting a 4
 	#(treat putting a tile as an action)
 class Board:
-	def __init__(self, seed, config, board = None, score = None):
+	def __init__(self, seed, cfg, board = None, score = None):
 		'''
 		seed must be set
 		'''
-		self.config = config
-		self.boardSize = config.getint('boardSize', -1)
+		self.cfg = cfg
+		self.boardSize = cfg.getint('boardSize', -1)
 		if self.boardSize == -1:
-			self.xSize = config.getint('xSize')
-			self.ySize = config.getint('ySize')
+			self.xSize = cfg.getint('xSize')
+			self.ySize = cfg.getint('ySize')
 		else:
 			self.xSize = self.boardSize
 			self.ySize = self.boardSize
@@ -48,6 +49,8 @@ class Board:
 		else:
 			self.score = 0
 		# score is only changed in self.step, directly doing self.add should not change it.
+		if seed == None:
+			seed = random.randrange(sys.maxsize)
 		self.rand = random.Random(seed)
 
 	def reset(self):
@@ -56,6 +59,7 @@ class Board:
 		'''
 		self.grid = [[0]*self.ySize for _ in range(self.xSize)]
 		self.score = 0
+
 	def moveALine(self, line, size, reverse):
 		if reverse:
 			line = line[::-1]#reverse
@@ -201,7 +205,7 @@ class Board:
 				if y + 1 < self.ySize and self.grid[x][y] == self.grid[x][y + 1]:
 					return False
 		return True
-	def legal_actions(self):#List[Action]
+	def legalActions(self):#List[Action]
 		return [i for i in range(4) if self.valid(i)]
 	def get_blanks(self):#List[(x,y)] where self[x][y] == 0
 		return [(x,y) for x in range(self.board_size) for y in range(self.board_size) if self.grid[x][y] == 0]
@@ -210,13 +214,16 @@ class Board:
 		if len(blank) == 0:
 			self.render()
 			raise BaseException('no blank in grid')
-		x,y = blank[randint(0,len(blank)-1)]
-		num = 2 if randint(1,10) == 1 else 1#10% to be a 4(2)
+		x,y = blank[self.rand.randint(0,len(blank)-1)]
+		if self.rand.randint(1,10) == 1:
+			num = 2
+		else:
+			num = 1
 		self.grid[x][y] = num
 		return add_pos_to_action(x,y,num,self.board_size)
 	def valid(self,action)->bool:
 		if 0 <= action and action <= 3:###### this needs optimizing
-			tmp = Environment(self.config,board = copy.deepcopy(self.grid))
+			tmp = Board(None, self.cfg, board = copy.deepcopy(self.grid))
 			a = copy.deepcopy(tmp.grid)
 			tmp.step(action)
 			for x in range(self.board_size):
@@ -257,7 +264,7 @@ class Board:
 #####
 def add_pos_to_action(x,y,num,board_size):
 	return 4+x*board_size+y+(num-1)*board_size**2
-def action_to_string(action:int,board_size)->str:
+def actionToString(action:int,board_size)->str:
 	if action_to_type(action,board_size) == 0:
 		return (['Up','Down','Left','Right'])[action]
 	#type 1(add tile)
