@@ -8,23 +8,24 @@ import sys
 import numpy as np
 
 from program import setup
+from game import environment
 
-'''
+"""
 from command import selfplay
 from dataio import replaybuffer, sharedstorage
 from game import environment
 from neuralnet import model
 from training import train
-'''
-bg   ="\x1b[48;5;"
-word ="\x1b[38;5;"
-end  ="m"
-reset="\x1b[0m"
+"""
+bg = "\x1b[48;5;"
+word = "\x1b[38;5;"
+end = "m"
+reset = "\x1b[0m"
 __version__ = "0.1.0"
-'''
+"""
 assumption:
 total training steps=1e5 or less
-'''
+"""
 """
 class Main:
 	Main class to manage all things.
@@ -510,22 +511,30 @@ class Main:
 			checkpoint_path=checkpoint_path, replay_buffer_path=replay_buffer_path, model_path=model_path,
 		)
 """
+
+
 def train(cfg):
-	pass
+    pass
+
+
 def test(cfg):
-	pass
-if __name__ == '__main__':
-	
-	parser = argparse.ArgumentParser()
-	parser.add_argument('mode', choices=['train', 'test'] ,help='mode')
-	parser.add_argument('-c', '--config', help='Config file to use', required=True)
-	parser.add_argument('-v', '--version', action='version', help='Displays version information and exits.', version='%(prog)s {version}'.format(version=__version__))
-	
-	args = parser.parse_args()
-	cfg = setup.ConfigParser(args.config)
-	if args.mode == 'train':
-		# Train
-		train(cfg)
-	elif args.mode == 'test':
-		# Test
-		test(cfg)
+    pass
+
+
+if __name__ == "__main__":
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument('mode', choices=['train', 'test'] ,help='mode')
+    parser.add_argument('-c', '--config', help='Config file to use', required=True)
+    parser.add_argument('-v', '--version', action='version', help='Displays version information and exits.', version='%(prog)s {version}'.format(version=__version__))
+
+    args = parser.parse_args()
+    cfg = setup.ConfigParser(args.config)
+    if args.mode == 'train':
+            # Train
+            train(cfg)
+    elif args.mode == 'test':
+            # Test
+            test(cfg)
+    """
+    environment.test()
