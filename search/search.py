@@ -40,12 +40,8 @@ class Search:
         searchPath = [node]
         while node.expanded():
             action, node = self.selectChild(node)
-            self.board.step(action)
-            searchPath.append(node)
-
-            action = self.board.add()
-            node = node.children[action]
-            searchPath.append(node)
+            reward = self.board.step(action)
+            self.board.add()
         assert node is not None
         output = NNOutput()
         await self.nnEval.evaluate(
@@ -53,7 +49,7 @@ class Search:
             output,
             self.useNHWC,
         )
-        node.expand(self.actionSpace, tf.nn.softmax(output.policy))
+        node.expand(self.board.legalActions, reward, output.policy)
         self.backpropagate(searchPath, output.value)
 
     def selectChild(self, node):
@@ -118,17 +114,13 @@ class Node:
             return 0
         return self.valueSum / self.visits
 
-    def expand(self, actions, reward, policyLogits):
-        assert type(actions) in (
-            int,
-            list,
-        ), f"type(actions)=type({actions})={type(actions)}, not int or list"
-        if type(actions) == int:
-            actions = list(range(actions))
+    def expand(self, legalActions, reward, policy):
         self.reward = reward
-        policy_values = tf.nn.softmax([policyLogits[a] for a in actions]).numpy()
-        policy = {a: policy_values[i] for i, a in enumerate(actions)}
-        for action, p in policy.items():
+        policyValues = tf.nn.softmax([policy[a] for a in legalActions]).numpy()
+        policy = [
+            [action, policyValues[index]] for index, action in enumerate(legalActions)
+        ]
+        for action, p in policy:
             self.children[action] = Node(p)
 
     def addExplorationNoise(self, dirichletAlpha, explorationFraction):

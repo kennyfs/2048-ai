@@ -284,7 +284,7 @@ class Board:
     def legalActions(self):  # List[Action]
         return [i for i in range(4) if self.valid(i)]
 
-    def get_blanks(self):  # List[(x,y)] where self[x][y] == 0
+    def getBlanks(self):  # List[(x,y)] where self[x][y] == 0
         return [
             (x, y)
             for x in range(self.board_size)
@@ -303,7 +303,7 @@ class Board:
         else:
             num = 1
         self.grid[x][y] = num
-        return add_pos_to_action(x, y, num, self.board_size)
+        return self.addPosToAction(x, y, num, self.board_size)
 
     def valid(self, action) -> bool:
         if 0 <= action and action <= 3:  ###### this needs optimizing
@@ -334,6 +334,9 @@ class Board:
 
     def actionSpace(self):
         return list(range(4))
+
+    def legalActions(self):
+        return [i for i in range(4) if self.valid(i)]
 
     def addActionToPos(self, action: int):
         """

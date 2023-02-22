@@ -37,8 +37,17 @@ class NNInput:
         out = np.array(result, dtype=np.float32)
         if useNHWC:  # CHW to HWC
             out = np.transpose(out, (1, 2, 0))
+
+        out = np.expand_dims(out, axis=0)
+
         self.spatialData = out
 
 
 class NNOutput:
-    pass
+    def __init__(self):
+        self.policy = None
+        self.value = None
+
+    def setResults(self, policy, value):
+        self.policy = policy
+        self.value = value
