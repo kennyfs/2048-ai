@@ -5,7 +5,7 @@ from copy import copy
 
 import numpy as np
 
-from dataio.trainingwrite import GameData
+from dataio.trainingwrite import FinishedGameData
 from game import environment
 from neuralnet import model
 from search.search import Search
@@ -62,7 +62,7 @@ class SelfPlay:
     async def playGame(
         self, temperature: float, render: bool
     ):  # for this single game, seed should be self.seed+game_id
-        gameData = GameData()
+        gameData = FinishedGameData()
         game = environment.Board()
         game.reset()
         actionSpace = game.actionSpace()  # action space in 2048 never changes
@@ -145,7 +145,7 @@ class SelfPlay:
         Play a game with a random policy.
         """
         for game_id in range(self.config.num_random_games_per_iteration):
-            gameHistory = GameData()
+            gameHistory = FinishedGameData()
             game = self.Game(self.config)
             game.reset()
             done = False

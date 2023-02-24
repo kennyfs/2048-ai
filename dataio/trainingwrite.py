@@ -1,4 +1,8 @@
-class GameData:
+import numpy as np
+from neuralnet.nnio import NNInput
+
+
+class FinishedGameData:
     """
     Store only useful information of a self-play game.
 
@@ -40,10 +44,6 @@ class GameData:
             )
             self.rootValues.append(0)
 
-    def getgrid(self, index):
-        index = index % len(self.gridHistory)
-        return self.gridHistory[index]
-
     def addRow(self, action, grid, reward):
         self.actionHistory.append(action)
         self.gridHistory.append(grid)
@@ -51,3 +51,20 @@ class GameData:
 
     def __str__(self):
         return f"gridHistory:\n{self.gridHistory}\n\nactionHistory:\n{self.actionHistory}\n\nrewardHistory:\n{self.rewardHistory}\n\nchildVisits:\n{self.childVisits}\n\nrootValues:\n{self.rootValues}"
+
+
+class TrainingWriter:
+    def __init__(self):
+        self.games = []
+
+    def saveToFile(self, filename):
+        with open(filename, "wb") as f:
+            nninput = NNInput()
+            inputArray = []
+            valueTarget = []
+            for game in self.games:
+                for t in range(len(game.gridHistory)):
+                    grid = game.gridHistory[t]
+                    nninput.fillV1(self.cfg.useNHWC, grid=grid)
+                    inputArray.append(np.copy(nninput.spatialData))
+                    valueTarget.append(self.computeValueTarget(game, t))
