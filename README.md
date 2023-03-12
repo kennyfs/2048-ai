@@ -1,4 +1,5 @@
 # 2048-ai  
+## 暫時擱置，轉戰coffee，[repo在這](https://github.com/kennychenfs/CoffeeAI)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 改成試圖用類似AlphaZero的方法訓練一個2048的模型，因為Muzero的方法似乎並沒有必要。  
 參考來源:[別人的完整實作](https://github.com/werner-duvaud/muzero-general)、[Deep Mind 官方虛擬碼(偽代碼)](https://arxiv.org/src/1911.08265v2/anc/pseudocode.py)、[陽明交大論文](https://hdl.handle.net/11296/amnm56)
